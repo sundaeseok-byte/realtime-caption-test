@@ -4,39 +4,51 @@
 
 <head>
 
-  <meta charset="utf-8" />
+<meta charset="utf-8" />
 
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
 
-  <title>실시간 한국어 자막 (append-only + 맞춤법 보정 옵션)</title>
+<title>실시간 자막 — 타자형 vs 완성형</title>
 
-  <style>
+<style>
 
-    :root { --fs: 22px; }
+  :root { --fs: 22px; }
 
-    body { margin:0; background:#111; color:#eee; font:var(--fs)/1.6 "Noto Sans KR",sans-serif; }
+  *{box-sizing:border-box}
 
-    header { padding:10px; border-bottom:1px solid #444; display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  body{margin:0;background:#0b0f14;color:#e9eef5;font:var(--fs)/1.6 "Noto Sans KR",system-ui,sans-serif}
 
-    button { padding:6px 14px; border-radius:6px; border:none; cursor:pointer; font-weight:600; }
+  header{padding:10px;border-bottom:1px solid #1e2a36;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 
-    button.primary { background:#4da3ff; color:#000; }
+  button{padding:6px 12px;border-radius:8px;border:1px solid #1e2a36;background:#111923;color:#e9eef5;cursor:pointer;font-weight:600}
 
-    button.danger  { background:#ff4d6d; color:#000; }
+  button.primary{background:#4da3ff;color:#001733;border-color:transparent}
 
-    #live { padding:8px 12px; color:#9aa3ad; font-style:italic; min-height:1.6em; }
+  button.danger{background:#ff4d6d;color:#250008;border-color:transparent}
 
-    #screen { padding:12px; height:70vh; overflow-y:auto; white-space:pre-wrap; }
+  .group{display:flex;gap:6px;align-items:center}
 
-    #state { margin-left:auto; color:#aaa; }
+  .pill{font-size:12px;color:#9aa3ad}
 
-    .group { display:flex; gap:6px; align-items:center; }
+  main{display:grid;grid-template-columns:1fr 1fr;gap:10px;padding:10px}
 
-    .pill  { font-size:12px; color:#9aa3ad; }
+  .col{border:1px solid #1e2a36;border-radius:14px;background:#0e141b;display:flex;flex-direction:column;min-height:70vh}
 
-    label.switch { display:flex; align-items:center; gap:6px; padding:6px 10px; border:1px solid #444; border-radius:8px; }
+  .col header{padding:8px 12px;border-bottom:1px solid #1e2a36;display:flex;justify-content:space-between;align-items:center}
 
-  </style>
+  .title{font-weight:700;color:#9bb2c7}
+
+  .pane{padding:12px;white-space:pre-wrap;overflow:auto;flex:1}
+
+  .note{font-size:12px;color:#8aa0b4;padding:8px 12px;border-top:1px solid #1e2a36}
+
+  #state{margin-left:auto;color:#9aa3ad}
+
+  .switch{display:flex;align-items:center;gap:6px;padding:6px 10px;border:1px solid #1e2a36;border-radius:8px;background:#111923}
+
+  @media (max-width: 800px){ main{grid-template-columns:1fr} }
+
+</style>
 
 </head>
 
@@ -48,11 +60,11 @@
 
     <button id="clear">🧹 지우기</button>
 
-    <button id="copy">📋 복사</button>
+    <button id="copy">📋 두 패널 복사</button>
 
 
 
-    <div class="group" aria-label="글자 크기 조절">
+    <div class="group">
 
       <button id="smaller" title="글자 작게">A−</button>
 
@@ -64,11 +76,11 @@
 
 
 
-    <label class="switch" title="확정 시점에만 맞춤법 보정해서 추가 (과거 텍스트는 수정 안 함)">
+    <label class="switch" title="완성형에만 적용됩니다 (무료 공개 API, 느릴 수 있음)">
 
       <input type="checkbox" id="spellToggle" />
 
-      맞춤법 보정(최종만)
+      맞춤법 보정(완성형)
 
     </label>
 
@@ -80,9 +92,31 @@
 
 
 
-  <div id="live" aria-live="polite"></div>
+  <main>
 
-  <div id="screen"></div>
+    <section class="col" id="col-live">
+
+      <header><span class="title">✍️ 실시간 타자형 (append-only)</span></header>
+
+      <div id="livePane" class="pane" aria-live="polite"></div>
+
+      <div class="note">바로바로 붙는 출력. 이미 찍힌 글자는 절대 수정하지 않습니다.</div>
+
+    </section>
+
+
+
+    <section class="col" id="col-final">
+
+      <header><span class="title">✅ 완성형 (중복 억제 + 디바운스)</span></header>
+
+      <div id="finalPane" class="pane"></div>
+
+      <div class="note">잠깐 생각한 뒤(약 0.9초) 한 문장씩 확정해 줄바꿈으로 저장합니다.</div>
+
+    </section>
+
+  </main>
 
 
 
@@ -90,7 +124,7 @@
 
 (() => {
 
-  /* ===== 글자 크기 ===== */
+  /* ============ 글자 크기 ============ */
 
   const FONT_MIN=16, FONT_MAX=64, STEP=2;
 
@@ -118,19 +152,17 @@
 
 
 
-  /* ===== 음성 인식 ===== */
+  /* ============ 음성 인식 ============ */
 
   const Rec = window.SpeechRecognition || window.webkitSpeechRecognition;
 
-  if (!Rec) {
+  if (!Rec){
 
-    document.body.innerHTML = "<p style='padding:16px'>❌ 크롬/삼성 인터넷 브라우저에서 실행해주세요.</p>";
+    document.body.innerHTML = "<p style='padding:16px'>❌ 이 브라우저는 Web Speech API를 지원하지 않습니다. Chrome/삼성 인터넷을 사용하세요.</p>";
 
     return;
 
   }
-
-
 
   const r = new Rec();
 
@@ -152,9 +184,9 @@
 
   const state   = document.getElementById("state");
 
-  const screen  = document.getElementById("screen");
+  const livePane= document.getElementById("livePane");
 
-  const live    = document.getElementById("live");
+  const finalPane= document.getElementById("finalPane");
 
   const spellToggle = document.getElementById("spellToggle");
 
@@ -164,41 +196,23 @@
 
 
 
-  // 본문은 append-only 텍스트 노드(깜빡임 방지)
+  /* ============ 좌측: 실시간 타자형 (append-only) ============ */
 
-  const tape = document.createTextNode("");
+  const liveNode = document.createTextNode("");
 
-  screen.appendChild(tape);
-
-
-
-  // 진행중 스트림(엔진의 최신 스냅샷)
-
-  let currentStream = "";
-
-  let queuedDelta = "";
+  livePane.appendChild(liveNode);
 
 
 
-  // 표시 속도
+  let liveCurrentStream = ""; // 엔진이 보는 최신 임시 문자열
 
-  const THROTTLE_MS = 380;
+  let liveQueuedDelta   = ""; // 아직 출력 안 한 꼬리
 
-  let lastFlushAt = 0, flushTimer = null;
+  let liveFlushTimer = null;
 
-
+  let liveLastFlushAt = 0;
 
-  // 중복 final 억제(같은 문장 연타 방지)
-
-  let lastFinalNorm = "";
-
-  let lastFinalAt   = 0;
-
-  const FINAL_DEDUP_MS = 1000;
-
-
-
-  function norm(s){ return (s||"").replace(/\s+/g," ").trim().toLowerCase(); }
+  const LIVE_THROTTLE_MS = 220; // ⏳ 타자 속도 (원하면 280~400으로 더 느리게)
 
 
 
@@ -210,59 +224,95 @@
 
   }
 
-
+  function liveScheduleAppend(newStream){
 
-  function scheduleAppendFrom(newStream){
-
-    const cpl = commonPrefixLen(currentStream, newStream);
+    const cpl = commonPrefixLen(liveCurrentStream, newStream);
 
     const delta = newStream.slice(cpl);
 
     if (!delta) return;
 
-    queuedDelta += delta;
+    liveQueuedDelta += delta;
 
 
 
     const now = performance.now();
 
-    const due = Math.max(0, THROTTLE_MS - (now - lastFlushAt));
+    const due = Math.max(0, LIVE_THROTTLE_MS - (now - liveLastFlushAt));
 
-    if (!flushTimer) flushTimer = setTimeout(flush, due);
+    if (!liveFlushTimer) liveFlushTimer = setTimeout(liveFlush, due);
 
-    currentStream = newStream;
+    liveCurrentStream = newStream; // 화면은 append-only, 내부 스냅샷만 교체
 
   }
 
-
+  function liveFlush(){
 
-  function flush(){
+    if (liveQueuedDelta){
 
-    if (queuedDelta) {
+      liveNode.data += liveQueuedDelta; // 교체 없이 덧붙임
 
-      tape.data += queuedDelta;
+      livePane.scrollTop = livePane.scrollHeight;
 
-      screen.scrollTop = screen.scrollHeight;
-
-      queuedDelta = "";
+      liveQueuedDelta = "";
 
     }
 
-    lastFlushAt = performance.now();
+    liveLastFlushAt = performance.now();
 
-    flushTimer = null;
+    liveFlushTimer = null;
 
   }
 
 
 
-  /* ===== LanguageTool 맞춤법 검사 (최종만) =====
+  /* ============ 우측: 완성형 (중복 억제 + 디바운스 + 선택적 맞춤법) ============ */
 
-     공개 API: https://api.languagetool.org/v2/check (요청 제한/지연 가능)
+  const finalNode = document.createTextNode("");
 
-     실패 시 원문 그대로 쓴다(폴백). */
+  finalPane.appendChild(finalNode);
+
+
+
+  // final 디바운스 & 중복 억제
+
+  let pendingFinal = "";           // 최근 수집된 final 후보
+
+  let debounceTimer = null;
+
+  const DEBOUNCE_MS = 900;         // 잠깐 기다렸다가 한 번만 확정
+
+  let lastFinalNorm = "";          // 짧은 시간 내 동일 문장 무시
+
+  let lastFinalAt   = 0;
+
+  const FINAL_DEDUP_MS = 1000;
+
+
+
+  function norm(s){ return (s||"").replace(/\s+/g," ").replace(/[.,!?…！？。~]+$/g,"").trim().toLowerCase(); }
+
+
+
+  // 완성형에 줄바꿈으로 추가
+
+  function appendFinalLine(line){
+
+    if (!line) return;
+
+    finalNode.data += (finalNode.data && !/\n$/.test(finalNode.data) ? "\n" : "") + line;
+
+    finalPane.scrollTop = finalPane.scrollHeight;
+
+  }
+
+
+
+  // 공개 LanguageTool로 간단 보정 (실패하면 원문 사용)
 
   async function grammarCheckKo(text, timeoutMs = 1500){
+
+    if (!spellToggle.checked) return text;
 
     const controller = new AbortController();
 
@@ -274,7 +324,7 @@
 
         method: "POST",
 
-        headers: { "Content-Type":"application/x-www-form-urlencoded" },
+        headers: {"Content-Type":"application/x-www-form-urlencoded"},
 
         body: new URLSearchParams({ language:"ko", text }),
 
@@ -288,11 +338,7 @@
 
       const data = await res.json();
 
-      // 제안 적용
-
       let out = text;
-
-      // matches는 뒤에서 앞으로 적용해야 인덱스 안 깨짐
 
       const matches = (data.matches || []).sort((a,b)=> (b.offset - a.offset));
 
@@ -310,11 +356,11 @@
 
       return out;
 
-    }catch(_){
+    }catch{
 
       clearTimeout(to);
 
-      return text; // 실패하면 원문 유지
+      return text;
 
     }
 
@@ -322,7 +368,27 @@
 
 
 
-  r.onresult = async (e) => {
+  function commitFinalNow(txt){
+
+    const src = txt.trim();
+
+    if (!src) return;
+
+    grammarCheckKo(src).then(fixed => {
+
+      appendFinalLine(fixed);
+
+      pendingFinal = "";
+
+    });
+
+  }
+
+
+
+  /* ============ 인식 이벤트 ============ */
+
+  r.onresult = (e) => {
 
     let interim = "";
 
@@ -340,7 +406,7 @@
 
         const n = norm(seg);
 
-        if (n && n===lastFinalNorm && (now-lastFinalAt)<FINAL_DEDUP_MS) continue;
+        if (n && n===lastFinalNorm && (now-lastFinalAt)<FINAL_DEDUP_MS) continue; // 빠른 중복 차단
 
         lastFinalNorm = n; lastFinalAt = now;
 
@@ -356,57 +422,25 @@
 
 
 
-    // 모드: 보정 OFF → 인터림도 본문에 append-only
+    // 좌측 실시간: interim을 델타로 즉시(타자속도로) 붙임
 
-    if (!spellToggle.checked) {
-
-      live.textContent = ""; // 라이브 영역 미사용
-
-      if (interim) scheduleAppendFrom(interim);
-
-      if (finals.length) currentStream = "";
-
-      return;
-
-    }
+    if (interim) liveScheduleAppend(interim);
 
 
 
-    // 모드: 보정 ON → 인터림은 라이브 영역에만, 본문은 final 확정 후 보정 적용해 append
-
-    if (interim) {
-
-      live.textContent = interim;
-
-    } else {
-
-      live.textContent = "";
-
-    }
-
-
+    // 우측 완성형: final을 디바운스 후 한 번만 확정
 
     if (finals.length){
 
-      // 여러 final이 한꺼번에 오면 마지막 문장만 사용 (가장 최신)
+      pendingFinal = finals[finals.length-1];
 
-      const raw = finals[finals.length-1].trim();
+      if (debounceTimer) clearTimeout(debounceTimer);
 
-      if (raw) {
+      debounceTimer = setTimeout(()=> commitFinalNow(pendingFinal), DEBOUNCE_MS);
 
-        const fixed = await grammarCheckKo(raw);
+      // 좌측 실시간 스트림은 다음 문장 대비 초기화(화면은 유지, 내부 스냅샷만 리셋)
 
-        // 본문에 새로 추가(append-only, 과거 텍스트는 건드리지 않음). 공백으로 구분
-
-        tape.data += (tape.data && !/\s$/.test(tape.data) ? " " : "") + fixed + " ";
-
-        screen.scrollTop = screen.scrollHeight;
-
-      }
-
-      currentStream = "";
-
-      live.textContent = "";
+      liveCurrentStream = "";
 
     }
 
@@ -418,7 +452,7 @@
 
   r.onend = () => {
 
-    if (recognizing) { try { r.start(); } catch {} }
+    if (recognizing) { try{ r.start(); }catch{} }
 
     else { state.textContent="대기"; toggle.textContent="🎙️ 시작"; toggle.className="primary"; }
 
@@ -426,7 +460,9 @@
 
   r.onerror = (e) => {
 
-    tape.data += `(오류:${e.error}) `;
+    // 오류는 두 패널 중 우측에만 남김
+
+    appendFinalLine(`(오류: ${e.error})`);
 
   };
 
@@ -434,15 +470,29 @@
 
   toggle.onclick = async () => {
 
-    if (!recognizing) {
+    if (!recognizing){
 
-      try { const s = await navigator.mediaDevices.getUserMedia({audio:true}); s.getTracks().forEach(t=>t.stop()); }
+      try{
 
-      catch { alert("마이크 권한 필요"); return; }
+        const s = await navigator.mediaDevices.getUserMedia({audio:true});
+
+        s.getTracks().forEach(t=>t.stop());
+
+      }catch{
+
+        alert("마이크 권한이 필요합니다.");
+
+        return;
+
+      }
 
       recognizing = true; r.start();
 
-    } else { recognizing = false; r.stop(); }
+    }else{
+
+      recognizing = false; r.stop();
+
+    }
 
   };
 
@@ -450,19 +500,37 @@
 
   clearBtn.onclick = () => {
 
-    tape.data=""; currentStream=""; queuedDelta="";
+    liveNode.data = "";
 
-    live.textContent="";
+    finalNode.data = "";
 
-    if (flushTimer){ clearTimeout(flushTimer); flushTimer=null; }
+    liveCurrentStream = "";
+
+    liveQueuedDelta = "";
+
+    if (liveFlushTimer){ clearTimeout(liveFlushTimer); liveFlushTimer=null; }
+
+    pendingFinal = "";
+
+    if (debounceTimer){ clearTimeout(debounceTimer); debounceTimer=null; }
 
   };
 
-  copyBtn.onclick  = async () => {
+
 
-    try { await navigator.clipboard.writeText(tape.data); state.textContent="복사됨"; setTimeout(()=>state.textContent=recognizing?"🎤 인식 중":"대기",900); }
+  copyBtn.onclick = async () => {
 
-    catch { alert("복사 실패"); }
+    const both = `[실시간]\n${liveNode.data}\n\n[완성형]\n${finalNode.data}`;
+
+    try{
+
+      await navigator.clipboard.writeText(both);
+
+      state.textContent = "복사됨";
+
+      setTimeout(()=> state.textContent = recognizing ? "🎤 인식 중" : "대기", 900);
+
+    }catch{ alert("복사 실패"); }
 
   };
 
