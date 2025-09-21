@@ -8,23 +8,29 @@
 
   <meta name="viewport" content="width=device-width,initial-scale=1" />
 
-  <title>실시간 한국어 자막 (반복 억제 강화)</title>
+  <title>실시간 한국어 자막 (심플 + 글자크기)</title>
 
   <style>
 
-    body { margin:0; background:#111; color:#eee; font:18px/1.6 "Noto Sans KR",sans-serif; }
+    :root { --fs: 22px; }
 
-    header { padding:10px; border-bottom:1px solid #444; display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+    body { margin:0; background:#111; color:#eee; font:var(--fs)/1.6 "Noto Sans KR",sans-serif; }
 
-    button { padding:6px 12px; border-radius:6px; border:none; cursor:pointer; }
+    header { padding:10px; border-bottom:1px solid #444; display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+
+    button { padding:6px 14px; border-radius:6px; border:none; cursor:pointer; font-weight:600; }
 
     button.primary { background:#4da3ff; color:#000; }
 
-    button.danger { background:#ff4d6d; color:#000; }
+    button.danger  { background:#ff4d6d; color:#000; }
 
-    #screen { padding:12px; height:75vh; overflow-y:auto; white-space:pre-wrap; }
+    #screen { padding:12px; height:80vh; overflow-y:auto; white-space:pre-wrap; }
 
     #state { margin-left:auto; color:#aaa; }
+
+    .group { display:flex; gap:6px; align-items:center; }
+
+    .pill  { font-size:12px; color:#9aa3ad; }
 
   </style>
 
@@ -40,9 +46,25 @@
 
     <button id="copy">📋 복사</button>
 
+
+
+    <div class="group" aria-label="글자 크기 조절">
+
+      <button id="smaller" title="글자 작게">A−</button>
+
+      <button id="bigger"  title="글자 크게">A+</button>
+
+      <span id="fsLabel" class="pill"></span>
+
+    </div>
+
+
+
     <span id="state">대기</span>
 
   </header>
+
+
 
   <div id="screen"></div>
 
@@ -52,11 +74,41 @@
 
 (() => {
 
+  // ===== 글자 크기 조절 =====
+
+  const FONT_MIN = 16, FONT_MAX = 64, STEP = 2;
+
+  const fsLabel = document.getElementById("fsLabel");
+
+  let curFs = Number(localStorage.getItem("subtitle_fs_px") || 22);
+
+  function applyFs(px){
+
+    curFs = Math.min(FONT_MAX, Math.max(FONT_MIN, px));
+
+    document.documentElement.style.setProperty("--fs", curFs + "px");
+
+    fsLabel.textContent = `${curFs}px`;
+
+    localStorage.setItem("subtitle_fs_px", String(curFs));
+
+  }
+
+  applyFs(curFs);
+
+  document.getElementById("smaller").onclick = () => applyFs(curFs - STEP);
+
+  document.getElementById("bigger").onclick  = () => applyFs(curFs + STEP);
+
+
+
+  // ===== 음성 인식 =====
+
   const Rec = window.SpeechRecognition || window.webkitSpeechRecognition;
 
   if (!Rec) {
 
-    document.body.innerHTML = "<p style='padding:16px'>❌ 크롬/삼성 인터넷 브라우저를 사용해주세요.</p>";
+    document.body.innerHTML = "<p style='padding:16px'>❌ 크롬/삼성 인터넷 브라우저에서 실행해주세요.</p>";
 
     return;
 
@@ -90,35 +142,41 @@
 
   // 누적/표시 상태
 
-  let finalText = "";         // 확정 누적 (줄바꿈 없음, 끝에 공백 1개 유지)
+  let finalText = "";          // 확정 누적 (한 줄로 이어쓰기, 끝 공백 1개 유지)
 
-  let lastShown = "";         // 마지막으로 화면에 표시한 전체 문자열
+  let lastShown = "";          // 마지막 화면에 표시된 전체 문자열
 
-  let recentFinals = [];      // 최근 final 정규화 버전 (중복 차단용)
+  let debounceTimer = null;    // 확정 디바운스 타이머
 
-  const MAX_RECENT = 20;
+  let pendingFinal = "";       // 디바운스 대기 중인 최신 final 텍스트
 
 
 
-  // 타임윈도우 중복 차단
+  // 파라미터 (필요 시 조정)
+
+  const DEBOUNCE_MS   = 900;   // 말이 더 이어질지 0.9초 기다렸다가 한 번만 확정
+
+  const FINAL_DEDUP_MS= 700;   // 같은 final이 연달아 오면 0.7초 내엔 무시
+
+  const MIN_DELTA     = 3;     // 새로 늘어나는 꼬리(delta)가 3자 미만이면 붙이지 않음
+
+
+
+  // 짧은 시간 중복 차단용
 
   let lastFinalNorm = "";
 
-  let lastFinalAt = 0;
-
-  const FINAL_DEDUP_MS = 400; // 0.4초 내 동일 final 무시
+  let lastFinalAt   = 0;
 
 
 
-  // 정규화: 공백/문장부호/케이스 차이 제거
-
   function norm(s){
 
-    return (s || "")
+    return (s||"")
 
-      .replace(/\s+/g, " ")
+      .replace(/\s+/g," ")
 
-      .replace(/[.,!?…！？。~]+$/g, "") // 끝 문장부호 제거
+      .replace(/[.,!?…！？。~]+$/g,"")
 
       .trim()
 
@@ -128,39 +186,19 @@
 
 
 
-  function remember(normLine){
-
-    if (!normLine) return false;
-
-    if (recentFinals.includes(normLine)) return false;
-
-    recentFinals.push(normLine);
-
-    if (recentFinals.length > MAX_RECENT) recentFinals.shift();
-
-    return true;
-
-  }
-
-
-
-  // finalText의 끝부분과 newSeg의 앞부분이 겹치면 "겹치지 않는 꼬리"만 반환
+  // prev의 끝과 newSeg의 앞이 겹치면 겹침을 제외한 꼬리만 반환
 
   function deltaAppend(prev, newSeg){
 
     if (!newSeg) return "";
 
-    // 비교 길이를 제한 (마지막 100자와 newSeg의 앞 100자까지만 비교)
-
-    const max = 100;
+    const max = 120;
 
     const tail = prev.slice(-max);
 
     const head = newSeg.slice(0, max);
 
     let k = Math.min(tail.length, head.length);
-
-    // 가장 긴 겹침 찾기
 
     while (k > 0) {
 
@@ -178,13 +216,33 @@
 
   function setScreen(text){
 
-    if (text === lastShown) return; // 불필요한 리렌더 방지
+    if (text === lastShown) return;
 
     screen.textContent = text;
 
     lastShown = text;
 
     screen.scrollTop = screen.scrollHeight;
+
+  }
+
+
+
+  function commitFinal(txt){
+
+    const clean = (txt || "").trim();
+
+    const delta = deltaAppend(finalText, clean);
+
+    if (delta.length >= MIN_DELTA) {
+
+      finalText = (finalText + delta).replace(/\s*$/,"") + " ";
+
+    }
+
+    pendingFinal = "";
+
+    setScreen(finalText);
 
   }
 
@@ -204,33 +262,17 @@
 
         const n = norm(raw);
 
-        // 타임윈도우 + 최근목록 중복 차단
+        if (n && n === lastFinalNorm && (now - lastFinalAt) < FINAL_DEDUP_MS) continue;
 
-        if (n && (n === lastFinalNorm && (now - lastFinalAt) < FINAL_DEDUP_MS)) {
-
-          continue;
-
-        }
-
-        lastFinalNorm = n;
-
-        lastFinalAt = now;
-
-        if (!remember(n)) continue;
+        lastFinalNorm = n; lastFinalAt = now;
 
 
 
-        // 겹침 제거 delta만 붙이기
+        pendingFinal = raw;
 
-        const delta = deltaAppend(finalText, raw.trim());
+        if (debounceTimer) clearTimeout(debounceTimer);
 
-        if (delta) {
-
-          // 끝에 공백 하나 유지
-
-          finalText = (finalText + delta).replace(/\s*$/,"") + " ";
-
-        }
+        debounceTimer = setTimeout(() => commitFinal(pendingFinal), DEBOUNCE_MS);
 
       } else {
 
@@ -240,7 +282,9 @@
 
     }
 
-    setScreen(finalText + interim);
+    // 화면엔 항상 "확정 누적 + 진행중/대기중" 표시
+
+    setScreen(finalText + (interim || pendingFinal));
 
   };
 
@@ -262,49 +306,55 @@
 
     if (!recognizing) {
 
-      try { 
+      try {
 
-        const s = await navigator.mediaDevices.getUserMedia({audio:true}); 
+        const s = await navigator.mediaDevices.getUserMedia({audio:true});
 
-        s.getTracks().forEach(t=>t.stop()); 
+        s.getTracks().forEach(t=>t.stop());
 
-      } catch(e){ 
+      } catch {
 
-        alert("마이크 권한 필요"); 
+        alert("마이크 권한 필요");
 
-        return; 
+        return;
 
       }
 
       recognizing = true; r.start();
 
-    } else { recognizing = false; r.stop(); }
+    } else {
+
+      recognizing = false; r.stop();
+
+    }
 
   };
 
 
 
-  clearBtn.onclick = () => { 
+  clearBtn.onclick = () => {
 
-    finalText=""; lastShown=""; recentFinals=[]; lastFinalNorm=""; lastFinalAt=0;
+    finalText=""; lastShown=""; pendingFinal="";
+
+    if (debounceTimer) { clearTimeout(debounceTimer); debounceTimer=null; }
 
     setScreen("");
 
   };
 
+
+
   copyBtn.onclick = async () => {
 
-    try { 
+    try {
 
-      await navigator.clipboard.writeText(screen.textContent); 
+      await navigator.clipboard.writeText(screen.textContent);
 
-      state.textContent="복사됨"; 
+      state.textContent="복사됨";
 
-      setTimeout(()=> state.textContent=recognizing?"🎤 인식 중":"대기",800); 
+      setTimeout(()=> state.textContent = recognizing ? "🎤 인식 중" : "대기", 900);
 
-    }
-
-    catch { alert("복사 실패"); }
+    } catch { alert("복사 실패"); }
 
   };
 
