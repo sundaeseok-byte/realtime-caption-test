@@ -8,7 +8,7 @@
 
   <meta name="viewport" content="width=device-width,initial-scale=1" />
 
-  <title>실시간 한국어 자막 (글자 단위)</title>
+  <title>실시간 한국어 자막 (중복 방지 포함)</title>
 
   <style>
 
@@ -88,9 +88,27 @@
 
 
 
-  // 현재까지 누적된 텍스트
-
   let finalText = "";
+
+  let recentFinals = []; // 최근 확정 문장 기억
+
+  const MAX_RECENT = 10;
+
+
+
+  function alreadyShown(line){
+
+    if (!line) return true;
+
+    if (recentFinals.includes(line)) return true;
+
+    recentFinals.push(line);
+
+    if (recentFinals.length > MAX_RECENT) recentFinals.shift();
+
+    return false;
+
+  }
 
 
 
@@ -100,21 +118,23 @@
 
     for (let i=e.resultIndex; i<e.results.length; i++) {
 
-      const txt = e.results[i][0].transcript;
+      const txt = e.results[i][0].transcript.trim();
 
       if (e.results[i].isFinal) {
 
-        finalText += txt; // 확정 → 누적
+        if (!alreadyShown(txt)) {
+
+          finalText += txt + " ";
+
+        }
 
       } else {
 
-        interim += txt;   // 임시 → 즉시 표시
+        interim += txt;
 
       }
 
     }
-
-    // 확정 + 임시 결과를 합쳐서 표시
 
     screen.textContent = finalText + interim;
 
@@ -140,21 +160,49 @@
 
     if (!recognizing) {
 
-      try { const s = await navigator.mediaDevices.getUserMedia({audio:true}); s.getTracks().forEach(t=>t.stop()); } catch(e){ alert("마이크 권한 필요"); return; }
+      try { 
 
-      recognizing = true; r.start();
+        const s = await navigator.mediaDevices.getUserMedia({audio:true}); 
 
-    } else { recognizing = false; r.stop(); }
+        s.getTracks().forEach(t=>t.stop()); 
+
+      } catch(e){ 
+
+        alert("마이크 권한 필요"); 
+
+        return; 
+
+      }
+
+      recognizing = true; 
+
+      r.start();
+
+    } else { 
+
+      recognizing = false; 
+
+      r.stop(); 
+
+    }
 
   };
 
 
 
-  clearBtn.onclick = () => { finalText=""; screen.textContent=""; };
+  clearBtn.onclick = () => { finalText=""; recentFinals=[]; screen.textContent=""; };
 
   copyBtn.onclick = async () => {
 
-    try { await navigator.clipboard.writeText(screen.textContent); state.textContent="복사됨"; setTimeout(()=> state.textContent=recognizing?"🎤 인식 중":"대기",800); }
+    try { 
+
+      await navigator.clipboard.writeText(screen.textContent); 
+
+      state.textContent="복사됨"; 
+
+      setTimeout(()=> state.textContent=recognizing?"🎤 인식 중":"대기",800); 
+
+    }
 
     catch { alert("복사 실패"); }
 
