@@ -8,7 +8,7 @@
 
   <meta name="viewport" content="width=device-width,initial-scale=1" />
 
-  <title>실시간 한국어 자막 (심플 + 글자크기)</title>
+  <title>실시간 한국어 자막 (append-only · 느린 스트리밍)</title>
 
   <style>
 
@@ -74,9 +74,9 @@
 
 (() => {
 
-  // ===== 글자 크기 조절 =====
+  /* ===== 글자 크기 ===== */
 
-  const FONT_MIN = 16, FONT_MAX = 64, STEP = 2;
+  const FONT_MIN=16, FONT_MAX=64, STEP=2;
 
   const fsLabel = document.getElementById("fsLabel");
 
@@ -102,7 +102,7 @@
 
 
 
-  // ===== 음성 인식 =====
+  /* ===== 음성 인식 ===== */
 
   const Rec = window.SpeechRecognition || window.webkitSpeechRecognition;
 
@@ -124,125 +124,111 @@
 
   r.interimResults = true;
 
+  r.maxAlternatives = 1;
+
+
+
+  const toggle = document.getElementById("toggle");
+
+  const clearBtn= document.getElementById("clear");
+
+  const copyBtn = document.getElementById("copy");
+
+  const state   = document.getElementById("state");
+
+  const screen  = document.getElementById("screen");
+
 
 
   let recognizing = false;
 
-  const toggle = document.getElementById("toggle");
+
 
-  const clearBtn = document.getElementById("clear");
+  // 화면에 이미 "붙여 쓴 텍스트"
 
-  const copyBtn = document.getElementById("copy");
+  let written = "";                 // 화면에 실제 출력된 문자열(append-only)
 
-  const state = document.getElementById("state");
+  // 현재 인식 세션에서 브라우저가 만들어내는 진행중 문자열(덮어쓰기용 내부 상태)
 
-  const screen = document.getElementById("screen");
+  let currentStream = "";           // interim 누적 스냅샷(브라우저 관점)
+
+  // 스로틀링
+
+  const THROTTLE_MS = 220;          // 표시 속도: 0.22초 간격
+
+  let lastFlushAt = 0;
+
+  let queuedDelta = "";             // 다음 플러시 때 붙일 델타
 
 
 
-  // 누적/표시 상태
+  function commonPrefixLen(a,b){
 
-  let finalText = "";          // 확정 누적 (한 줄로 이어쓰기, 끝 공백 1개 유지)
+    const n = Math.min(a.length, b.length);
 
-  let lastShown = "";          // 마지막 화면에 표시된 전체 문자열
+    let i=0;
 
-  let debounceTimer = null;    // 확정 디바운스 타이머
+    while (i<n && a.charCodeAt(i)===b.charCodeAt(i)) i++;
 
-  let pendingFinal = "";       // 디바운스 대기 중인 최신 final 텍스트
-
-
-
-  // 파라미터 (필요 시 조정)
-
-  const DEBOUNCE_MS   = 900;   // 말이 더 이어질지 0.9초 기다렸다가 한 번만 확정
-
-  const FINAL_DEDUP_MS= 700;   // 같은 final이 연달아 오면 0.7초 내엔 무시
-
-  const MIN_DELTA     = 3;     // 새로 늘어나는 꼬리(delta)가 3자 미만이면 붙이지 않음
-
-
-
-  // 짧은 시간 중복 차단용
-
-  let lastFinalNorm = "";
-
-  let lastFinalAt   = 0;
-
-
-
-  function norm(s){
-
-    return (s||"")
-
-      .replace(/\s+/g," ")
-
-      .replace(/[.,!?…！？。~]+$/g,"")
-
-      .trim()
-
-      .toLowerCase();
+    return i;
 
   }
 
 
 
-  // prev의 끝과 newSeg의 앞이 겹치면 겹침을 제외한 꼬리만 반환
+  // "브라우저가 만든 새 interim 문자열"을 화면에 "증분"으로 반영
 
-  function deltaAppend(prev, newSeg){
+  function scheduleAppendFrom(newStream){
 
-    if (!newSeg) return "";
+    // 이전 스트림과의 공통 접두사 이후 부분만 델타로 추출
 
-    const max = 120;
+    const cpl = commonPrefixLen(currentStream, newStream);
 
-    const tail = prev.slice(-max);
+    const delta = newStream.slice(cpl);
 
-    const head = newSeg.slice(0, max);
+    if (!delta) return;
 
-    let k = Math.min(tail.length, head.length);
+    queuedDelta += delta;
 
-    while (k > 0) {
+
 
-      if (tail.endsWith(head.slice(0, k))) break;
+    const now = performance.now();
 
-      k--;
+    const due = Math.max(0, THROTTLE_MS - (now - lastFlushAt));
+
+    if (!flushTimer) {
+
+      flushTimer = setTimeout(flush, due);
 
     }
 
-    return newSeg.slice(k);
+    currentStream = newStream; // 내부 스트림 스냅샷 갱신(화면은 append-only)
 
   }
 
 
 
-  function setScreen(text){
+  let flushTimer = null;
 
-    if (text === lastShown) return;
+  function flush(){
 
-    screen.textContent = text;
+    if (queuedDelta) {
 
-    lastShown = text;
+      // 줄바꿈 없이 이어쓰기, 공백은 있는 그대로
 
-    screen.scrollTop = screen.scrollHeight;
+      written += queuedDelta;
 
-  }
+      screen.textContent = written;
 
-
+      screen.scrollTop = screen.scrollHeight;
 
-  function commitFinal(txt){
-
-    const clean = (txt || "").trim();
-
-    const delta = deltaAppend(finalText, clean);
-
-    if (delta.length >= MIN_DELTA) {
-
-      finalText = (finalText + delta).replace(/\s*$/,"") + " ";
+      queuedDelta = "";
 
     }
 
-    pendingFinal = "";
+    lastFlushAt = performance.now();
 
-    setScreen(finalText);
+    flushTimer = null;
 
   }
 
@@ -250,41 +236,57 @@
 
   r.onresult = (e) => {
 
-    let interim = "";
+    // 새로 들어온 이벤트에서 interim과 final을 스캔
 
-    for (let i=e.resultIndex; i<e.results.length; i++) {
+    let latestInterim = null;
 
-      const raw = e.results[i][0].transcript;
-
-      if (e.results[i].isFinal) {
-
-        const now = performance.now();
-
-        const n = norm(raw);
-
-        if (n && n === lastFinalNorm && (now - lastFinalAt) < FINAL_DEDUP_MS) continue;
-
-        lastFinalNorm = n; lastFinalAt = now;
+    let gotFinal = false;
 
 
 
-        pendingFinal = raw;
+    for (let i=e.resultIndex; i<e.results.length; i++){
 
-        if (debounceTimer) clearTimeout(debounceTimer);
+      const seg = e.results[i][0].transcript;
 
-        debounceTimer = setTimeout(() => commitFinal(pendingFinal), DEBOUNCE_MS);
+      if (e.results[i].isFinal) {
+
+        gotFinal = true;
+
+        // append-only 정책: final도 "수정 없이" 델타만 추가되도록
+
+        // 브라우저가 final로 확정했더라도, 우리는 이미 interim에서 append해 왔으므로
+
+        // 별도 수정/덮어쓰기 없이 "현재 stream"만 리셋하고 다음 문장 대비
 
       } else {
 
-        interim += raw;
+        latestInterim = (latestInterim ?? "") + seg;
 
       }
 
     }
 
-    // 화면엔 항상 "확정 누적 + 진행중/대기중" 표시
+
 
-    setScreen(finalText + (interim || pendingFinal));
+    if (latestInterim !== null) {
+
+      // 현재 세션의 새 interim 전체 문자열을 기준으로 델타만 이어붙임
+
+      scheduleAppendFrom(latestInterim);
+
+    }
+
+
+
+    if (gotFinal) {
+
+      // final이 오면 브라우저 내부 스트림은 다음 문장으로 바뀌므로,
+
+      // 우리는 화면을 건드리지 않고 "스트림 스냅샷"만 리셋한다.
+
+      currentStream = "";
+
+    }
 
   };
 
@@ -294,9 +296,21 @@
 
   r.onend = () => {
 
-    if (recognizing) { try{ r.start(); }catch{} }
+    // 인식이 끊겨도 자동 재시작
+
+    if (recognizing) { try { r.start(); } catch {} }
 
     else { state.textContent="대기"; toggle.textContent="🎙️ 시작"; toggle.className="primary"; }
+
+  };
+
+  r.onerror = (e) => {
+
+    // 오류도 append-only로 표시
+
+    written += `(오류: ${e.error}) `;
+
+    screen.textContent = written;
 
   };
 
@@ -306,6 +320,8 @@
 
     if (!recognizing) {
 
+      // 마이크 권한 예열
+
       try {
 
         const s = await navigator.mediaDevices.getUserMedia({audio:true});
@@ -314,7 +330,7 @@
 
       } catch {
 
-        alert("마이크 권한 필요");
+        alert("마이크 권한이 필요합니다.");
 
         return;
 
@@ -334,11 +350,11 @@
 
   clearBtn.onclick = () => {
 
-    finalText=""; lastShown=""; pendingFinal="";
+    written=""; currentStream=""; queuedDelta="";
 
-    if (debounceTimer) { clearTimeout(debounceTimer); debounceTimer=null; }
+    if (flushTimer) { clearTimeout(flushTimer); flushTimer=null; }
 
-    setScreen("");
+    screen.textContent="";
 
   };
 
