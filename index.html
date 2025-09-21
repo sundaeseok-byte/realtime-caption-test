@@ -8,7 +8,7 @@
 
   <meta name="viewport" content="width=device-width,initial-scale=1" />
 
-  <title>실시간 한국어 자막 (중복 방지 포함)</title>
+  <title>실시간 한국어 자막 (반복 억제 강화)</title>
 
   <style>
 
@@ -88,25 +88,103 @@
 
 
 
-  let finalText = "";
+  // 누적/표시 상태
 
-  let recentFinals = []; // 최근 확정 문장 기억
+  let finalText = "";         // 확정 누적 (줄바꿈 없음, 끝에 공백 1개 유지)
 
-  const MAX_RECENT = 10;
+  let lastShown = "";         // 마지막으로 화면에 표시한 전체 문자열
+
+  let recentFinals = [];      // 최근 final 정규화 버전 (중복 차단용)
+
+  const MAX_RECENT = 20;
 
 
 
-  function alreadyShown(line){
+  // 타임윈도우 중복 차단
 
-    if (!line) return true;
+  let lastFinalNorm = "";
 
-    if (recentFinals.includes(line)) return true;
+  let lastFinalAt = 0;
 
-    recentFinals.push(line);
+  const FINAL_DEDUP_MS = 400; // 0.4초 내 동일 final 무시
+
+
+
+  // 정규화: 공백/문장부호/케이스 차이 제거
+
+  function norm(s){
+
+    return (s || "")
+
+      .replace(/\s+/g, " ")
+
+      .replace(/[.,!?…！？。~]+$/g, "") // 끝 문장부호 제거
+
+      .trim()
+
+      .toLowerCase();
+
+  }
+
+
+
+  function remember(normLine){
+
+    if (!normLine) return false;
+
+    if (recentFinals.includes(normLine)) return false;
+
+    recentFinals.push(normLine);
 
     if (recentFinals.length > MAX_RECENT) recentFinals.shift();
 
-    return false;
+    return true;
+
+  }
+
+
+
+  // finalText의 끝부분과 newSeg의 앞부분이 겹치면 "겹치지 않는 꼬리"만 반환
+
+  function deltaAppend(prev, newSeg){
+
+    if (!newSeg) return "";
+
+    // 비교 길이를 제한 (마지막 100자와 newSeg의 앞 100자까지만 비교)
+
+    const max = 100;
+
+    const tail = prev.slice(-max);
+
+    const head = newSeg.slice(0, max);
+
+    let k = Math.min(tail.length, head.length);
+
+    // 가장 긴 겹침 찾기
+
+    while (k > 0) {
+
+      if (tail.endsWith(head.slice(0, k))) break;
+
+      k--;
+
+    }
+
+    return newSeg.slice(k);
+
+  }
+
+
+
+  function setScreen(text){
+
+    if (text === lastShown) return; // 불필요한 리렌더 방지
+
+    screen.textContent = text;
+
+    lastShown = text;
+
+    screen.scrollTop = screen.scrollHeight;
 
   }
 
@@ -118,27 +196,51 @@
 
     for (let i=e.resultIndex; i<e.results.length; i++) {
 
-      const txt = e.results[i][0].transcript.trim();
+      const raw = e.results[i][0].transcript;
 
       if (e.results[i].isFinal) {
 
-        if (!alreadyShown(txt)) {
+        const now = performance.now();
 
-          finalText += txt + " ";
+        const n = norm(raw);
+
+        // 타임윈도우 + 최근목록 중복 차단
+
+        if (n && (n === lastFinalNorm && (now - lastFinalAt) < FINAL_DEDUP_MS)) {
+
+          continue;
+
+        }
+
+        lastFinalNorm = n;
+
+        lastFinalAt = now;
+
+        if (!remember(n)) continue;
+
+
+
+        // 겹침 제거 delta만 붙이기
+
+        const delta = deltaAppend(finalText, raw.trim());
+
+        if (delta) {
+
+          // 끝에 공백 하나 유지
+
+          finalText = (finalText + delta).replace(/\s*$/,"") + " ";
 
         }
 
       } else {
 
-        interim += txt;
+        interim += raw;
 
       }
 
     }
 
-    screen.textContent = finalText + interim;
-
-    screen.scrollTop = screen.scrollHeight;
+    setScreen(finalText + interim);
 
   };
 
@@ -174,23 +276,21 @@
 
       }
 
-      recognizing = true; 
+      recognizing = true; r.start();
 
-      r.start();
-
-    } else { 
-
-      recognizing = false; 
-
-      r.stop(); 
-
-    }
+    } else { recognizing = false; r.stop(); }
 
   };
 
 
 
-  clearBtn.onclick = () => { finalText=""; recentFinals=[]; screen.textContent=""; };
+  clearBtn.onclick = () => { 
+
+    finalText=""; lastShown=""; recentFinals=[]; lastFinalNorm=""; lastFinalAt=0;
+
+    setScreen("");
+
+  };
 
   copyBtn.onclick = async () => {
 
