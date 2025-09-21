@@ -10,19 +10,18 @@
     body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.5 system-ui, -apple-system, Segoe UI, Roboto, Apple SD Gothic Neo, Noto Sans KR, Arial, sans-serif; }
     header { padding:14px 16px; display:flex; gap:8px; align-items:center; flex-wrap:wrap; border-bottom:1px solid #1c2733; }
     h1 { font-size:16px; margin:0 8px 0 0; color:var(--muted); font-weight:600; }
-    button, select { background:#111923; color:var(--fg); border:1px solid #1f2a36; padding:10px 14px; border-radius:12px; cursor:pointer; font-weight:600; }
+    button, select, label { background:#111923; color:var(--fg); border:1px solid #1f2a36; padding:10px 12px; border-radius:12px; cursor:pointer; font-weight:600; }
     button:hover { border-color:#2a3a4c; }
     button.primary { background:var(--accent); color:#001733; border-color:transparent; }
     button.danger { background:#ff4d6d; color:#250008; border-color:transparent; }
-    #status { margin-left:auto; font-size:13px; color:var(--muted); display:flex; align-items:center; gap:6px; }
+    #status { margin-left:auto; font-size:13px; color:var(--muted); display:flex; align-items:center; gap:6px; background:transparent; border:none; padding:0; }
     #lamp { width:10px; height:10px; border-radius:50%; background:#485a6c; display:inline-block; }
     #lamp.on { background:#27d07d; box-shadow:0 0 0 3px rgba(39,208,125,0.15); }
     main { padding:12px; }
     #screen { width:100%; height:65vh; padding:16px; border:1px solid #1f2a36; border-radius:16px; background:#0e141b; overflow:auto; white-space:pre-wrap; }
     #caret { opacity:.6; }
     footer { display:flex; gap:8px; flex-wrap:wrap; padding:12px; border-top:1px solid #1c2733; }
-    .pill { font-size:12px; color:var(--muted); }
-    .sr { position:absolute; left:-9999px; }
+    .pill { font-size:12px; color:var(--muted); background:transparent; border:none; padding:0; }
   </style>
 </head>
 <body>
@@ -39,8 +38,8 @@
       <option value="36">글자 36</option>
       <option value="48">글자 48</option>
     </select>
-    <label class="pill"><input type="checkbox" id="timestamp" /> 타임스탬프</label>
-    <label class="pill"><input type="checkbox" id="autoscroll" checked /> 자동 스크롤</label>
+    <label title="타임스탬프"><input type="checkbox" id="timestamp" /> 타임스탬프</label>
+    <label title="자동 스크롤"><input type="checkbox" id="autoscroll" checked /> 자동 스크롤</label>
     <div id="status"><span id="lamp" aria-hidden="true"></span><span id="stateText">대기</span></div>
   </header>
 
@@ -49,7 +48,7 @@
   </main>
 
   <footer>
-    <small class="pill">Tip: 시작 후 마이크 권한을 허용하세요. 인식이 멈추면 자동 재시작합니다.</small>
+    <small class="pill">Tip: 시작 후 마이크 권한을 허용하세요. 멈추면 자동 재시작합니다.</small>
   </footer>
 
 <script>
@@ -73,26 +72,66 @@
   }
 
   let recognizing = false;
-  let interimSpan = null;
   let rec = null;
-  let lastFinal = ""; // ⬅️ 마지막 확정 문장 저장(중복 방지)
+  let interimSpan = null;
+
+  // 중복 방지(최근 확정 문장 10개 기억)
+  let recentFinals = [];
+  function pushFinal(line){
+    if (recentFinals.includes(line)) return false;
+    recentFinals.push(line);
+    if (recentFinals.length > 10) recentFinals.shift();
+    return true;
+  }
+
+  // 문장 버퍼(문장 부호 나올 때까지 모았다가 한 줄로 확정)
+  let sentenceBuf = "";
+  const endPunc = /[.!?…！？。]$/;
+
+  // 화면 꺼짐 방지(지원 브라우저에서만 작동)
+  let wakeLock = null;
+  async function keepAwake(on){
+    try{
+      if (on && 'wakeLock' in navigator) {
+        wakeLock = await navigator.wakeLock.request('screen');
+        wakeLock.addEventListener?.('release', () => { /* noop */ });
+      } else if (wakeLock) {
+        await wakeLock.release();
+        wakeLock = null;
+      }
+    }catch{ /* 무시 */ }
+  }
 
   function nowTS() {
     const d = new Date();
-    return `[${d.getHours().toString().padStart(2,'0')}:${d.getMinutes().toString().padStart(2,'0')}:${d.getSeconds().toString().padStart(2,'0')}] `;
+    return `[${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}:${String(d.getSeconds()).padStart(2,'0')}] `;
   }
 
   function appendText(text, isFinal=false) {
     if (isFinal) {
-      const line = text.trim();
-      // 동일한 확정 문장이 반복되면 무시
-      if (line === lastFinal) return;
-      lastFinal = line;
+      const chunk = text.trim();
+      if (!chunk) return;
+
+      // 너무 짧은 결과(잡음) 제거 (2자 이하 버림)
+      if (chunk.length <= 2) return;
+
+      // 문장 버퍼에 합치기
+      sentenceBuf += (sentenceBuf && !/[ \u00A0]$/.test(sentenceBuf) ? " " : "") + chunk;
+
+      // 문장 끝 아니면 아직 확정하지 않음
+      if (!endPunc.test(chunk)) return;
+
+      const line = sentenceBuf.trim();
+      sentenceBuf = ""; // 문장 하나 완성 → 버퍼 비우기
+
+      // 최근 확정 중복 방지
+      if (!pushFinal(line)) return;
 
       const fullLine = (tsChk.checked ? nowTS() : '') + line;
       scr.append(document.createTextNode(fullLine + '\n'));
       if (interimSpan) { interimSpan.remove(); interimSpan = null; }
     } else {
+      // 임시 결과 표시
       if (!interimSpan) {
         interimSpan = document.createElement('span');
         interimSpan.id = 'caret';
@@ -122,7 +161,10 @@
     rec.interimResults = true;
     rec.maxAlternatives = 1;
 
+    let restarting = false; // 이중 재시작 방지
+
     rec.onstart = () => setUI(true);
+
     rec.onresult = (e) => {
       let interim = '';
       for (let i = e.resultIndex; i < e.results.length; i++) {
@@ -135,14 +177,19 @@
       }
       if (interim) appendText(interim, false);
     };
-    rec.onerror = (e) => appendText(`(오류: ${e.error})`, true);
+
+    rec.onerror = (e) => {
+      appendText(`(오류: ${e.error})`, true);
+    };
+
     rec.onend = () => {
-      // 의도치 않게 종료되면 자동 재시작
-      if (recognizing) {
+      if (!recognizing) return setUI(false);
+      if (restarting) return;
+      restarting = true;
+      setTimeout(() => {
         try { rec.start(); } catch(_) {}
-      } else {
-        setUI(false);
-      }
+        restarting = false;
+      }, 300);
     };
   }
 
@@ -156,7 +203,7 @@
     setUI(false);
   }
 
-  // 🔑 마이크 권한 예열: not-allowed 방지
+  // 마이크 권한 예열 (not-allowed 예방)
   async function ensureMic() {
     if (!navigator.mediaDevices?.getUserMedia) return true;
     try {
@@ -169,14 +216,16 @@
     }
   }
 
-  // 버튼 이벤트
+  // 이벤트 바인딩
   btn.addEventListener('click', async () => {
     if (!recognizing) {
       const ok = await ensureMic();
       if (!ok) return;
+      await keepAwake(true);
       startRec();
     } else {
       recognizing = false;
+      await keepAwake(false);
       stopRec();
     }
   });
@@ -184,7 +233,8 @@
   clearBtn.addEventListener('click', () => {
     scr.textContent = '';
     interimSpan = null;
-    lastFinal = ""; // 화면 지울 때 마지막 문장도 리셋
+    sentenceBuf = '';
+    recentFinals = [];
   });
 
   copyBtn.addEventListener('click', async () => {
@@ -192,7 +242,7 @@
       await navigator.clipboard.writeText(scr.textContent);
       stateText.textContent = '복사됨';
       setTimeout(()=> stateText.textContent = recognizing ? '인식 중' : '대기', 1000);
-    } catch { alert('복사 실패: 브라우저 권한 확인'); }
+    } catch { alert('복사 실패: 브라우저 권한을 확인하세요.'); }
   });
 
   saveBtn.addEventListener('click', () => {
