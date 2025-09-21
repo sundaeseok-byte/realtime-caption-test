@@ -8,7 +8,7 @@
 
   <meta name="viewport" content="width=device-width,initial-scale=1" />
 
-  <title>실시간 한국어 자막 (append-only · 느린 스트리밍)</title>
+  <title>실시간 한국어 자막 (append-only · anti-blink)</title>
 
   <style>
 
@@ -144,21 +144,61 @@
 
 
 
-  // 화면에 이미 "붙여 쓴 텍스트"
+  // 화면에 '교체 없이' 덧붙일 순수 텍스트 노드
 
-  let written = "";                 // 화면에 실제 출력된 문자열(append-only)
+  const tape = document.createTextNode("");
 
-  // 현재 인식 세션에서 브라우저가 만들어내는 진행중 문자열(덮어쓰기용 내부 상태)
+  screen.appendChild(tape);
 
-  let currentStream = "";           // interim 누적 스냅샷(브라우저 관점)
+
 
-  // 스로틀링
+  // append-only 상태
 
-  const THROTTLE_MS = 220;          // 표시 속도: 0.22초 간격
+  let writtenLen = 0;            // 현재 화면에 써진 길이
 
-  let lastFlushAt = 0;
+  let currentStream = "";        // 엔진이 생각하는 진행중 스냅샷
 
-  let queuedDelta = "";             // 다음 플러시 때 붙일 델타
+  let queuedDelta = "";          // 아직 화면에 안 붙인 델타
+
+
+
+  // 표시 속도 (느리게)
+
+  const THROTTLE_MS = 280;
+
+  let lastFlushAt = 0, flushTimer = null;
+
+
+
+  // 워치독: onresult가 너무 오래 안 오면 재시작
+
+  const WATCHDOG_MS = 8000;
+
+  let lastResultAt = 0, watchdogTimer = null;
+
+  function kickWatchdog(){
+
+    lastResultAt = performance.now();
+
+    if (!watchdogTimer) {
+
+      watchdogTimer = setInterval(() => {
+
+        if (!recognizing) return;
+
+        if (performance.now() - lastResultAt > WATCHDOG_MS) {
+
+          try { r.stop(); r.start(); } catch {}
+
+          lastResultAt = performance.now();
+
+        }
+
+      }, 2000);
+
+    }
+
+  }
 
 
 
@@ -176,15 +216,11 @@
 
 
 
-  // "브라우저가 만든 새 interim 문자열"을 화면에 "증분"으로 반영
-
   function scheduleAppendFrom(newStream){
-
-    // 이전 스트림과의 공통 접두사 이후 부분만 델타로 추출
 
     const cpl = commonPrefixLen(currentStream, newStream);
 
-    const delta = newStream.slice(cpl);
+    const delta = newStream.slice(cpl);          // 추가된 꼬리만
 
     if (!delta) return;
 
@@ -196,29 +232,21 @@
 
     const due = Math.max(0, THROTTLE_MS - (now - lastFlushAt));
 
-    if (!flushTimer) {
+    if (!flushTimer) flushTimer = setTimeout(flush, due);
 
-      flushTimer = setTimeout(flush, due);
-
-    }
-
-    currentStream = newStream; // 내부 스트림 스냅샷 갱신(화면은 append-only)
+    currentStream = newStream;                   // 내부 스냅샷만 갱신(화면은 append-only)
 
   }
 
 
 
-  let flushTimer = null;
-
   function flush(){
 
     if (queuedDelta) {
 
-      // 줄바꿈 없이 이어쓰기, 공백은 있는 그대로
+      tape.data += queuedDelta;                 // 교체 없이 '진짜' 덧붙임
 
-      written += queuedDelta;
-
-      screen.textContent = written;
+      writtenLen = tape.data.length;
 
       screen.scrollTop = screen.scrollHeight;
 
@@ -236,7 +264,7 @@
 
   r.onresult = (e) => {
 
-    // 새로 들어온 이벤트에서 interim과 final을 스캔
+    kickWatchdog();
 
     let latestInterim = null;
 
@@ -252,11 +280,7 @@
 
         gotFinal = true;
 
-        // append-only 정책: final도 "수정 없이" 델타만 추가되도록
-
-        // 브라우저가 final로 확정했더라도, 우리는 이미 interim에서 append해 왔으므로
-
-        // 별도 수정/덮어쓰기 없이 "현재 stream"만 리셋하고 다음 문장 대비
+        // append-only 정책: 이미 interim으로 붙여온 텍스트를 수정/교체하지 않음
 
       } else {
 
@@ -270,7 +294,7 @@
 
     if (latestInterim !== null) {
 
-      // 현재 세션의 새 interim 전체 문자열을 기준으로 델타만 이어붙임
+      // 새 interim 스냅샷 기준으로 델타만 이어붙임
 
       scheduleAppendFrom(latestInterim);
 
@@ -280,9 +304,7 @@
 
     if (gotFinal) {
 
-      // final이 오면 브라우저 내부 스트림은 다음 문장으로 바뀌므로,
-
-      // 우리는 화면을 건드리지 않고 "스트림 스냅샷"만 리셋한다.
+      // final 이후 다음 문장을 위해 내부 스냅샷 리셋
 
       currentStream = "";
 
@@ -292,11 +314,9 @@
 
 
 
-  r.onstart = () => { state.textContent="🎤 인식 중"; toggle.textContent="⏸️ 중지"; toggle.className="danger"; };
+  r.onstart = () => { state.textContent="🎤 인식 중"; toggle.textContent="⏸️ 중지"; toggle.className="danger"; kickWatchdog(); };
 
   r.onend = () => {
-
-    // 인식이 끊겨도 자동 재시작
 
     if (recognizing) { try { r.start(); } catch {} }
 
@@ -306,11 +326,7 @@
 
   r.onerror = (e) => {
 
-    // 오류도 append-only로 표시
-
-    written += `(오류: ${e.error}) `;
-
-    screen.textContent = written;
+    tape.data += `(오류:${e.error}) `;
 
   };
 
@@ -319,8 +335,6 @@
   toggle.onclick = async () => {
 
     if (!recognizing) {
-
-      // 마이크 권한 예열
 
       try {
 
@@ -350,11 +364,9 @@
 
   clearBtn.onclick = () => {
 
-    written=""; currentStream=""; queuedDelta="";
+    tape.data = ""; writtenLen=0; currentStream=""; queuedDelta="";
 
     if (flushTimer) { clearTimeout(flushTimer); flushTimer=null; }
-
-    screen.textContent="";
 
   };
 
@@ -362,11 +374,7 @@
 
   copyBtn.onclick = async () => {
 
-    try {
-
-      await navigator.clipboard.writeText(screen.textContent);
-
-      state.textContent="복사됨";
+    try { await navigator.clipboard.writeText(tape.data); state.textContent="복사됨";
 
       setTimeout(()=> state.textContent = recognizing ? "🎤 인식 중" : "대기", 900);
 
