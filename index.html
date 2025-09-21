@@ -8,23 +8,41 @@
 
   <meta name="viewport" content="width=device-width,initial-scale=1" />
 
-  <title>실시간 한국어 자막 (누적/최적화)</title>
+  <title>실시간 한국어 자막 (누적/사라지지 않음)</title>
 
   <style>
 
-    body { margin:0; font-family:sans-serif; background:#111; color:#eee; }
+    :root { --bg:#0b0f14; --fg:#e9eef5; --muted:#8aa0b4; --accent:#4da3ff; --panel:#0e141b; --border:#1f2a36;}
 
-    header { padding:10px; border-bottom:1px solid #444; display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+    * { box-sizing: border-box; }
 
-    button { padding:6px 12px; border-radius:6px; border:none; cursor:pointer; }
+    body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.5 system-ui,-apple-system,Segoe UI,Roboto,Apple SD Gothic Neo,Noto Sans KR,Arial,sans-serif; }
 
-    button.primary { background:#4da3ff; color:#000; }
+    header { padding:12px; display:flex; gap:8px; align-items:center; flex-wrap:wrap; border-bottom:1px solid var(--border); }
 
-    button.danger { background:#ff4d6d; color:#000; }
+    h1 { font-size:16px; margin:0 8px 0 0; color:var(--muted); font-weight:700; }
 
-    #screen { padding:12px; height:70vh; overflow-y:auto; white-space:pre-wrap; }
+    button, select, label { background:#111923; color:var(--fg); border:1px solid var(--border); padding:8px 12px; border-radius:12px; cursor:pointer; font-weight:600; }
 
-    #live { opacity:.6; font-style:italic; min-height:24px; }
+    button.primary { background:var(--accent); color:#001733; border-color:transparent; }
+
+    button.danger { background:#ff4d6d; color:#250008; border-color:transparent; }
+
+    main { padding:12px; }
+
+    .box { border:1px solid var(--border); border-radius:16px; background:var(--panel); overflow:hidden; }
+
+    .live { padding:10px 12px; border-bottom:1px dashed var(--border); opacity:.85; font-style:italic; min-height:36px; }
+
+    .hist { padding:12px; height:64vh; overflow:auto; white-space:pre-wrap; }
+
+    .row { margin:0 0 6px; }
+
+    .status { margin-left:auto; display:flex; align-items:center; gap:8px; color:var(--muted); }
+
+    #lamp { width:10px; height:10px; border-radius:50%; background:#485a6c; display:inline-block; }
+
+    #lamp.on { background:#27d07d; box-shadow:0 0 0 3px rgba(39,208,125,0.15); }
 
   </style>
 
@@ -34,21 +52,51 @@
 
   <header>
 
-    <button id="toggle" class="primary">🎙️ 시작</button>
+    <h1>실시간 한국어 자막</h1>
 
-    <button id="clear">🧹 지우기</button>
+    <button id="toggle" class="primary" aria-pressed="false">🎙️ 시작</button>
+
+    <button id="clear">🧹 화면 지우기</button>
 
     <button id="copy">📋 복사</button>
 
     <button id="save">💾 저장</button>
 
-    <span id="state">대기</span>
+    <select id="fontsize" title="글자 크기">
+
+      <option value="18">글자 18</option>
+
+      <option value="22" selected>글자 22</option>
+
+      <option value="28">글자 28</option>
+
+      <option value="36">글자 36</option>
+
+      <option value="48">글자 48</option>
+
+    </select>
+
+    <label><input type="checkbox" id="timestamp" /> 타임스탬프</label>
+
+    <label><input type="checkbox" id="autoscroll" checked /> 자동 스크롤</label>
+
+    <div class="status"><span id="lamp"></span><span id="stateText">대기</span></div>
 
   </header>
 
-  <div id="live"></div>
+
 
-  <div id="screen"></div>
+  <main>
+
+    <div class="box">
+
+      <div class="live" id="live" aria-live="polite"></div>
+
+      <div class="hist" id="hist"></div>
+
+    </div>
+
+  </main>
 
 
 
@@ -56,188 +104,22 @@
 
 (() => {
 
-  const Rec = window.SpeechRecognition || window.webkitSpeechRecognition;
+  const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
 
-  if (!Rec) {
+  const btn = document.getElementById('toggle');
 
-    document.body.innerHTML = "<p>❌ 이 브라우저는 음성 인식을 지원하지 않습니다. 크롬/삼성 인터넷을 사용하세요.</p>";
+  const clearBtn = document.getElementById('clear');
 
-    return;
+  const copyBtn = document.getElementById('copy');
 
-  }
+  const saveBtn = document.getElementById('save');
 
-
+  const fsSel = document.getElementById('fontsize');
 
-  const r = new Rec();
+  const tsChk = document.getElementById('timestamp');
 
-  r.lang = "ko-KR";
+  const autoChk = document.getElementById('autoscroll');
 
-  r.continuous = true;
+  const live = document.getElementById('live');
 
-  r.interimResults = true;
-
-
-
-  let recognizing = false;
-
-  let live = document.getElementById("live");
-
-  let screen = document.getElementById("screen");
-
-  let toggle = document.getElementById("toggle");
-
-  let state = document.getElementById("state");
-
-
-
-  // 침묵 타이머
-
-  let silenceTimer = null;
-
-  function resetSilenceTimer(finalText) {
-
-    if (silenceTimer) clearTimeout(silenceTimer);
-
-    silenceTimer = setTimeout(() => {
-
-      if (finalText && finalText.trim().length > 2) {
-
-        addLine(finalText.trim());
-
-        live.textContent = "";
-
-      }
-
-    }, 1200); // 1.2초 침묵 시 확정
-
-  }
-
-
-
-  function addLine(text){
-
-    const line = document.createElement("div");
-
-    line.textContent = text;
-
-    screen.append(line);
-
-    screen.scrollTop = screen.scrollHeight;
-
-  }
-
-
-
-  r.onresult = (e) => {
-
-    let interim = "";
-
-    for (let i=e.resultIndex; i<e.results.length; i++) {
-
-      let txt = e.results[i][0].transcript;
-
-      if (e.results[i].isFinal) {
-
-        if (txt.trim().length > 2) addLine(txt.trim());
-
-        live.textContent = "";
-
-      } else {
-
-        interim += txt;
-
-      }
-
-    }
-
-    if (interim) {
-
-      live.textContent = interim;
-
-      resetSilenceTimer(interim);
-
-    }
-
-  };
-
-
-
-  r.onstart = () => { state.textContent = "🎤 인식 중"; toggle.textContent = "⏸️ 중지"; toggle.className="danger"; };
-
-  r.onend = () => {
-
-    if (recognizing) { try{ r.start(); }catch{} }
-
-    else { state.textContent = "대기"; toggle.textContent = "🎙️ 시작"; toggle.className="primary"; }
-
-  };
-
-  r.onerror = (e) => { addLine("(오류: "+e.error+")"); };
-
-
-
-  toggle.onclick = async () => {
-
-    if (!recognizing) {
-
-      try {
-
-        const s = await navigator.mediaDevices.getUserMedia({ audio:true });
-
-        s.getTracks().forEach(t=>t.stop());
-
-      } catch(e){ addLine("(마이크 권한 필요)"); return; }
-
-      recognizing = true;
-
-      r.start();
-
-    } else {
-
-      recognizing = false;
-
-      r.stop();
-
-    }
-
-  };
-
-
-
-  document.getElementById("clear").onclick = () => { screen.textContent=""; live.textContent=""; };
-
-  document.getElementById("copy").onclick = async () => {
-
-    try {
-
-      await navigator.clipboard.writeText(screen.textContent);
-
-      state.textContent="복사됨"; setTimeout(()=> state.textContent="인식 중",1000);
-
-    } catch { alert("복사 실패"); }
-
-  };
-
-  document.getElementById("save").onclick = () => {
-
-    const blob = new Blob([screen.textContent], {type:"text/plain"});
-
-    const a = document.createElement("a");
-
-    a.href = URL.createObjectURL(blob);
-
-    a.download = "subtitle-"+Date.now()+".txt";
-
-    a.click();
-
-    URL.revokeObjectURL(a.href);
-
-  };
-
-})();
-
-</script>
-
-</body>
-
-</html>
+  const hist
