@@ -4,83 +4,41 @@
 
 <head>
 
-<meta charset="utf-8" />
+  <meta charset="utf-8" />
 
-<meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
 
-<title>실시간 자막 — 타자형 vs 완성형 (가변 분할)</title>
+  <title>실시간 한국어 자막 (줄바꿈 없이 이어쓰기)</title>
 
-<style>
+  <style>
 
-  :root { --fs: 22px; }
+    :root { --bg:#0b0f14; --fg:#e9eef5; --muted:#8aa0b4; --accent:#4da3ff; --border:#1f2a36; }
 
-  *{box-sizing:border-box}
+    * { box-sizing:border-box; }
 
-  body{margin:0;background:#0b0f14;color:#e9eef5;font:var(--fs)/1.6 "Noto Sans KR",system-ui,sans-serif}
+    body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.5 system-ui,-apple-system,Segoe UI,Roboto,"Noto Sans KR",Arial,sans-serif; }
 
-  header{padding:8px;border-bottom:1px solid #1e2a36;display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+    header { padding:12px; display:flex; gap:8px; align-items:center; flex-wrap:wrap; border-bottom:1px solid var(--border); }
 
-  button, select, label.switch{padding:6px 10px;border-radius:8px;border:1px solid #1e2a36;background:#111923;color:#e9eef5;cursor:pointer;font-weight:600}
+    button { padding:8px 12px; border-radius:10px; border:1px solid var(--border); cursor:pointer; font-weight:600; }
 
-  button.primary{background:#4da3ff;color:#001733;border-color:transparent}
+    button.primary { background:var(--accent); color:#001733; border-color:transparent; }
 
-  button.danger{background:#ff4d6d;color:#250008;border-color:transparent}
+    button.danger { background:#ff4d6d; color:#250008; border-color:transparent; }
 
-  select{appearance:none}
+    label, select { border:1px solid var(--border); padding:8px 12px; border-radius:10px; background:#111923; color:var(--fg); font-weight:600; }
 
-  .pill{font-size:12px;color:#9aa3ad}
+    main { padding:12px; }
 
-  #state{margin-left:auto;color:#9aa3ad}
+    #hist { border:1px solid var(--border); border-radius:16px; background:#0e141b; padding:14px; height:68vh; overflow:auto; white-space:pre-wrap; }
 
-
+    .status { margin-left:auto; display:flex; align-items:center; gap:8px; color:var(--muted); }
 
-  /* 기본: 실시간 40% / 완성형 60% */
+    #lamp { width:10px; height:10px; border-radius:50%; background:#485a6c; display:inline-block; }
 
-  main{display:grid;grid-template-columns:2fr 3fr;gap:6px;padding:6px}
+    #lamp.on { background:#27d07d; box-shadow:0 0 0 3px rgba(39,208,125,0.15); }
 
-  /* 분할 비율 프리셋 */
-
-  main[data-split="35-65"]{grid-template-columns:7fr 13fr}
-
-  main[data-split="40-60"]{grid-template-columns:2fr 3fr}
-
-  main[data-split="45-55"]{grid-template-columns:9fr 11fr}
-
-  main[data-split="50-50"]{grid-template-columns:1fr 1fr}
-
-
-
-  .col{border:1px solid #1e2a36;border-radius:10px;background:#0e141b;display:flex;flex-direction:column;min-height:54vh}
-
-  .col header{padding:6px 8px;border-bottom:1px solid #1e2a36}
-
-  .title{font-weight:700;color:#9bb2c7;font-size:14px}
-
-  .pane{padding:8px;white-space:pre-wrap;overflow:auto;flex:1}
-
-  .note{font-size:11px;color:#8aa0b4;padding:6px 8px;border-top:1px solid #1e2a36}
-
-
-
-  /* 📱 모바일: 위아래 배치 */
-
-  @media (max-width:768px){
-
-    main{grid-template-columns:1fr;gap:4px;padding:4px}
-
-    .col{min-height:42vh}
-
-    .title{font-size:13px}
-
-    .note{font-size:10px}
-
-    header{gap:4px;padding:6px}
-
-    button,select,label.switch{padding:5px 8px}
-
-  }
-
-</style>
+  </style>
 
 </head>
 
@@ -94,87 +52,35 @@
 
     <button id="copy">📋 복사</button>
 
-
+    <button id="save">💾 저장</button>
 
-    <!-- 보기/분할/컴팩트 -->
+    <label title="문장 확정 없이 들리는 대로 즉시 누적"><input type="checkbox" id="rawMode" checked /> RAW(즉시 누적)</label>
 
-    <select id="viewMode" title="보기 모드">
+    <label title="타임스탬프"><input type="checkbox" id="timestamp" /> 타임스탬프</label>
 
-      <option value="split" selected>양쪽 보기</option>
+    <select id="fontsize" title="글자 크기">
 
-      <option value="live">실시간만</option>
+      <option value="18">글자 18</option>
 
-      <option value="final">완성형만</option>
+      <option value="22" selected>글자 22</option>
 
-    </select>
+      <option value="28">글자 28</option>
 
-    <select id="splitSel" title="분할 비율">
+      <option value="36">글자 36</option>
 
-      <option value="35-65">35 : 65</option>
-
-      <option value="40-60" selected>40 : 60</option>
-
-      <option value="45-55">45 : 55</option>
-
-      <option value="50-50">50 : 50</option>
+      <option value="48">글자 48</option>
 
     </select>
 
-    <label class="switch"><input type="checkbox" id="compactToggle" /> 컴팩트</label>
-
-
-
-    <!-- 글자 크기 -->
-
-    <button id="smaller" title="글자 작게">A−</button>
-
-    <button id="bigger"  title="글자 크게">A+</button>
-
-    <span id="fsLabel" class="pill"></span>
-
-
-
-    <!-- 맞춤법(완성형에만) -->
-
-    <label class="switch" title="완성형에만 적용 (무료 공개 API)">
-
-      <input type="checkbox" id="spellToggle" />
-
-      맞춤법(완성형)
-
-    </label>
-
-
-
-    <span id="state">대기</span>
+    <div class="status"><span id="lamp"></span><span id="state">대기</span></div>
 
   </header>
 
 
 
-  <main id="grid" data-split="40-60">
+  <main>
 
-    <section class="col" id="col-live">
-
-      <header><span class="title">✍️ 실시간 타자형 (append-only)</span></header>
-
-      <div id="livePane" class="pane" aria-live="polite"></div>
-
-      <div class="note">바로 붙는 출력. 찍힌 글자는 수정하지 않습니다.</div>
-
-    </section>
-
-
-
-    <section class="col" id="col-final">
-
-      <header><span class="title">✅ 완성형 (중복 억제 + 디바운스)</span></header>
-
-      <div id="finalPane" class="pane"></div>
-
-      <div class="note">0.9초 생각 후 문장 단위로 줄바꿈 저장. 옵션으로 맞춤법 보정.</div>
-
-    </section>
+    <div id="hist" aria-live="polite" aria-atomic="false"></div>
 
   </main>
 
@@ -184,285 +90,377 @@
 
 (() => {
 
-  /* ===== 글자 크기 & 컴팩트 & 분할 ===== */
+  const Rec = window.SpeechRecognition || window.webkitSpeechRecognition;
 
-  const FONT_MIN=14,FONT_MAX=64,STEP=2;
+  if (!Rec) {
 
-  const fsLabel=document.getElementById("fsLabel");
+    document.body.innerHTML = "<p style='padding:16px'>❌ 이 브라우저는 음성 인식을 지원하지 않습니다. 크롬/삼성 인터넷을 사용하세요.</p>";
 
-  const compactToggle=document.getElementById("compactToggle");
-
-  const viewModeSel=document.getElementById("viewMode");
-
-  const splitSel=document.getElementById("splitSel");
-
-  const grid=document.getElementById("grid");
-
-
-
-  let curFs=Number(localStorage.getItem("subtitle_fs_px")||22);
-
-  function applyFs(px){
-
-    curFs=Math.min(FONT_MAX,Math.max(FONT_MIN,px));
-
-    document.documentElement.style.setProperty("--fs",curFs+"px");
-
-    fsLabel.textContent=`${curFs}px`;
-
-    localStorage.setItem("subtitle_fs_px",String(curFs));
+    return;
 
   }
 
-  applyFs(curFs);
+
 
-  document.getElementById("smaller").onclick=()=>applyFs(curFs-STEP);
+  const hist = document.getElementById('hist');
 
-  document.getElementById("bigger").onclick =()=>applyFs(curFs+STEP);
+  const toggle = document.getElementById('toggle');
+
+  const clearBtn = document.getElementById('clear');
+
+  const copyBtn = document.getElementById('copy');
+
+  const saveBtn = document.getElementById('save');
+
+  const rawModeChk = document.getElementById('rawMode');
+
+  const tsChk = document.getElementById('timestamp');
+
+  const fsSel = document.getElementById('fontsize');
+
+  const state = document.getElementById('state');
+
+  const lamp = document.getElementById('lamp');
 
 
 
-  compactToggle.addEventListener('change',()=>document.body.classList.toggle('compact',compactToggle.checked));
+  let recognizing = false;
 
-  function applyViewMode(m){
-
-    const live=document.getElementById('col-live');
-
-    const fin =document.getElementById('col-final');
-
-    if(m==='live'){live.style.display='flex';fin.style.display='none';}
-
-    else if(m==='final'){live.style.display='none';fin.style.display='flex';}
-
-    else {live.style.display='flex';fin.style.display='flex';}
-
-  }
-
-  applyViewMode(viewModeSel.value);
-
-  viewModeSel.addEventListener('change',()=>applyViewMode(viewModeSel.value));
+  let rec = null;
 
 
 
-  function applySplit(v){ grid.setAttribute('data-split',v); localStorage.setItem('subtitle_split',v); }
+  // RAW 모드: 너무 잦은 덧붙임 제어
 
-  applySplit(localStorage.getItem('subtitle_split')||splitSel.value);
+  const RAW_APPEND_INTERVAL = 100; // ms
 
-  splitSel.value = grid.getAttribute('data-split');
-
-  splitSel.addEventListener('change',()=>applySplit(splitSel.value));
+  let lastAppendAt = 0;
 
 
 
-  /* ===== 음성 인식 ===== */
+  // 스마트 모드: 침묵 확정 (줄바꿈 없이 이어쓰기)
 
-  const Rec=window.SpeechRecognition||window.webkitSpeechRecognition;
+  const SILENCE_MS = 700;
 
-  if(!Rec){document.body.innerHTML="<p style='padding:16px'>❌ 이 브라우저는 Web Speech API 미지원. Chrome/삼성 인터넷을 사용하세요.</p>";return;}
+  let sentenceBuf = "";
 
-  const r=new Rec(); r.lang="ko-KR"; r.continuous=true; r.interimResults=true; r.maxAlternatives=1;
-
-
-
-  const toggle=document.getElementById("toggle");
-
-  const clearBtn=document.getElementById("clear");
-
-  const copyBtn=document.getElementById("copy");
-
-  const state=document.getElementById("state");
-
-  const livePane=document.getElementById("livePane");
-
-  const finalPane=document.getElementById("finalPane");
-
-  const spellToggle=document.getElementById("spellToggle");
-
-  let recognizing=false;
+  let silenceTimer = null;
 
 
 
-  /* ===== 좌측: 실시간 append-only ===== */
+  // 화면 꺼짐 방지(지원 브라우저에서만)
 
-  const liveNode=document.createTextNode(""); livePane.appendChild(liveNode);
+  let wakeLock = null;
 
-  let liveCurrentStream=""; let liveQueuedDelta=""; let liveFlushTimer=null; let liveLastFlushAt=0;
-
-  const LIVE_THROTTLE_MS=220;
-
-  function commonPrefixLen(a,b){const n=Math.min(a.length,b.length);let i=0;while(i<n&&a.charCodeAt(i)===b.charCodeAt(i))i++;return i;}
-
-  function liveScheduleAppend(newStream){
-
-    const cpl=commonPrefixLen(liveCurrentStream,newStream);
-
-    const delta=newStream.slice(cpl);
-
-    if(!delta) return;
-
-    liveQueuedDelta+=delta;
-
-    const now=performance.now();
-
-    const due=Math.max(0,LIVE_THROTTLE_MS-(now-liveLastFlushAt));
-
-    if(!liveFlushTimer) liveFlushTimer=setTimeout(liveFlush,due);
-
-    liveCurrentStream=newStream;
-
-  }
-
-  function liveFlush(){
-
-    if(liveQueuedDelta){
-
-      liveNode.data+=liveQueuedDelta;
-
-      livePane.scrollTop=livePane.scrollHeight;
-
-      liveQueuedDelta="";
-
-    }
-
-    liveLastFlushAt=performance.now(); liveFlushTimer=null;
-
-  }
-
-
-
-  /* ===== 우측: 완성형 (디바운스+중복 억제+맞춤법 옵션) ===== */
-
-  const finalNode=document.createTextNode(""); finalPane.appendChild(finalNode);
-
-  let pendingFinal=""; let debounceTimer=null;
-
-  const DEBOUNCE_MS=900; let lastFinalNorm=""; let lastFinalAt=0; const FINAL_DEDUP_MS=1000;
-
-  function norm(s){return (s||"").replace(/\s+/g," ").replace(/[.,!?…！？。~]+$/g,"").trim().toLowerCase();}
-
-  function appendFinalLine(line){
-
-    if(!line) return;
-
-    finalNode.data+=(finalNode.data && !/\n$/.test(finalNode.data)?"\n":"")+line;
-
-    finalPane.scrollTop=finalPane.scrollHeight;
-
-  }
-
-  async function grammarCheckKo(text,timeoutMs=1500){
-
-    if(!spellToggle.checked) return text;
-
-    const controller=new AbortController(); const to=setTimeout(()=>controller.abort(),timeoutMs);
+  async function keepAwake(on){
 
     try{
 
-      const res=await fetch("https://api.languagetool.org/v2/check",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:new URLSearchParams({language:"ko",text}),signal:controller.signal});
+      if (on && 'wakeLock' in navigator) {
 
-      clearTimeout(to);
+        wakeLock = await navigator.wakeLock.request('screen');
 
-      if(!res.ok) throw new Error("HTTP "+res.status);
+      } else if (wakeLock) {
 
-      const data=await res.json(); let out=text; const matches=(data.matches||[]).sort((a,b)=>b.offset-a.offset);
+        await wakeLock.release(); wakeLock = null;
 
-      for(const m of matches){const rep=(m.replacements&&m.replacements[0]?.value)||null; if(!rep) continue; out=out.slice(0,m.offset)+rep+out.slice(m.offset+m.length);}
+      }
 
-      return out;
-
-    }catch{clearTimeout(to);return text;}
-
-  }
-
-  function commitFinalNow(txt){
-
-    const src=txt.trim(); if(!src) return;
-
-    grammarCheckKo(src).then(fixed=>{appendFinalLine(fixed); pendingFinal="";});
+    }catch{}
 
   }
 
 
 
-  /* ===== 이벤트 ===== */
+  function nowTS() {
 
-  r.onresult=(e)=>{
+    const d = new Date();
 
-    let interim="", finals=[];
+    const h = String(d.getHours()).padStart(2,'0');
 
-    for(let i=e.resultIndex;i<e.results.length;i++){
+    const m = String(d.getMinutes()).padStart(2,'0');
 
-      const seg=e.results[i][0].transcript;
+    const s = String(d.getSeconds()).padStart(2,'0');
 
-      if(e.results[i].isFinal){
+    return `[${h}:${m}:${s}] `;
 
-        const now=performance.now(); const n=norm(seg);
-
-        if(n && n===lastFinalNorm && (now-lastFinalAt)<FINAL_DEDUP_MS) continue;
-
-        lastFinalNorm=n; lastFinalAt=now; finals.push(seg);
-
-      } else interim+=seg;
-
-    }
-
-    if(interim) liveScheduleAppend(interim);
-
-    if(finals.length){
-
-      pendingFinal=finals[finals.length-1];
-
-      if(debounceTimer) clearTimeout(debounceTimer);
-
-      debounceTimer=setTimeout(()=>commitFinalNow(pendingFinal),DEBOUNCE_MS);
-
-      liveCurrentStream="";
-
-    }
-
-  };
-
-  r.onstart=()=>{state.textContent="🎤 인식 중";toggle.textContent="⏸️ 중지";toggle.className="danger";};
-
-  r.onend=()=>{if(recognizing){try{r.start();}catch{}}else{state.textContent="대기";toggle.textContent="🎙️ 시작";toggle.className="primary";}};
-
-  r.onerror=e=>appendFinalLine(`(오류:${e.error})`);
+  }
 
 
 
-  toggle.onclick=async()=>{
+  // 🔸 줄바꿈 없이 이어쓰기: 항상 끝에 공백 하나만 추가
 
-    if(!recognizing){
+  function appendChunk(text) {
 
-      try{const s=await navigator.mediaDevices.getUserMedia({audio:true});s.getTracks().forEach(t=>t.stop());}
+    if (!text) return;
 
-      catch{alert("마이크 권한이 필요합니다.");return;}
+    const ts = tsChk.checked ? nowTS() : '';
 
-      recognizing=true; r.start();
+    // 마지막이 공백이 아니면 공백 추가
 
-    } else { recognizing=false; r.stop(); }
+    const needSpace = hist.textContent && !/\s$/.test(hist.textContent);
 
-  };
+    hist.append(document.createTextNode((ts ? ts : '') + (needSpace ? '' : '') + text + ' '));
 
-  clearBtn.onclick=()=>{
+    hist.scrollTop = hist.scrollHeight;
 
-    liveNode.data=""; finalNode.data=""; liveCurrentStream=""; liveQueuedDelta="";
+  }
 
-    if(liveFlushTimer){clearTimeout(liveFlushTimer); liveFlushTimer=null;}
+
 
-    pendingFinal=""; if(debounceTimer){clearTimeout(debounceTimer); debounceTimer=null;}
+  function setUI(on) {
 
-  };
+    recognizing = on;
 
-  copyBtn.onclick=async()=>{
+    toggle.textContent = on ? '⏸️ 중지' : '🎙️ 시작';
 
-    const both=`[실시간]\n${liveNode.data}\n\n[완성형]\n${finalNode.data}`;
+    toggle.className = on ? 'danger' : 'primary';
 
-    try{await navigator.clipboard.writeText(both); state.textContent="복사됨"; setTimeout(()=>state.textContent=recognizing?"🎤 인식 중":"대기",900);}
+    state.textContent = on ? '인식 중' : '대기';
 
-    catch{alert("복사 실패");}
+    lamp.classList.toggle('on', on);
 
-  };
+  }
+
+
+
+  function createRec() {
+
+    rec = new Rec();
+
+    rec.lang = 'ko-KR';
+
+    rec.continuous = true;
+
+    rec.interimResults = true;
+
+    rec.maxAlternatives = 1;
+
+
+
+    let restarting = false;
+
+
+
+    rec.onstart = () => setUI(true);
+
+
+
+    rec.onresult = (e) => {
+
+      let interimAccum = '';
+
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+
+        const t = e.results[i][0].transcript;
+
+        if (e.results[i].isFinal) {
+
+          if (rawModeChk.checked) {
+
+            appendChunk(t.trim()); // 최종도 줄바꿈 없이
+
+          } else {
+
+            if (t.trim()) {
+
+              if (sentenceBuf && !/[ \u00A0]$/.test(sentenceBuf)) sentenceBuf += ' ';
+
+              sentenceBuf += t.trim();
+
+            }
+
+            finalizeIfSilent(); // 줄바꿈 없이 이어쓰기 확정
+
+          }
+
+        } else {
+
+          interimAccum += t;
+
+        }
+
+      }
+
+
+
+      if (interimAccum) {
+
+        if (rawModeChk.checked) {
+
+          const now = performance.now();
+
+          if (now - lastAppendAt >= RAW_APPEND_INTERVAL) {
+
+            appendChunk(interimAccum.trim());
+
+            lastAppendAt = now;
+
+          }
+
+        } else {
+
+          if (sentenceBuf && !/[ \u00A0]$/.test(sentenceBuf)) sentenceBuf += ' ';
+
+          sentenceBuf += interimAccum.trim();
+
+          finalizeIfSilent();
+
+        }
+
+      }
+
+    };
+
+
+
+    rec.onerror = (e) => {
+
+      appendChunk(`(오류: ${e.error})`);
+
+    };
+
+
+
+    rec.onend = () => {
+
+      if (!recognizing) return setUI(false);
+
+      if (restarting) return;
+
+      restarting = true;
+
+      setTimeout(() => {
+
+        try { rec.start(); } catch {}
+
+        restarting = false;
+
+      }, 250);
+
+    };
+
+  }
+
+
+
+  function finalizeIfSilent(){
+
+    if (silenceTimer) clearTimeout(silenceTimer);
+
+    silenceTimer = setTimeout(() => {
+
+      if (sentenceBuf.trim().length) {
+
+        appendChunk(sentenceBuf.trim()); // 🔸 줄바꿈 없이 이어쓰기
+
+        sentenceBuf = '';
+
+      }
+
+    }, SILENCE_MS);
+
+  }
+
+
+
+  async function ensureMic() {
+
+    if (!navigator.mediaDevices?.getUserMedia) return true;
+
+    try {
+
+      const s = await navigator.mediaDevices.getUserMedia({ audio:true });
+
+      s.getTracks().forEach(t=>t.stop());
+
+      return true;
+
+    } catch(e) {
+
+      appendChunk('(마이크 권한 필요)');
+
+      return false;
+
+    }
+
+  }
+
+
+
+  function startRec() { if (!rec) createRec(); try { rec.start(); } catch {} }
+
+  function stopRec() { if (rec) rec.stop(); setUI(false); }
+
+
+
+  // 이벤트
+
+  toggle.addEventListener('click', async () => {
+
+    if (!recognizing) {
+
+      const ok = await ensureMic();
+
+      if (!ok) return;
+
+      await keepAwake(true);
+
+      startRec();
+
+    } else {
+
+      await keepAwake(false);
+
+      stopRec();
+
+    }
+
+  });
+
+
+
+  clearBtn.addEventListener('click', () => { hist.textContent = ''; sentenceBuf=''; });
+
+
+
+  copyBtn.addEventListener('click', async () => {
+
+    try {
+
+      await navigator.clipboard.writeText(hist.textContent);
+
+      state.textContent = '복사됨'; setTimeout(()=> state.textContent = recognizing ? '인식 중' : '대기', 800);
+
+    } catch { alert('복사 실패: 권한 확인'); }
+
+  });
+
+
+
+  saveBtn.addEventListener('click', () => {
+
+    const blob = new Blob([hist.textContent], {type:'text/plain;charset=utf-8'});
+
+    const a = document.createElement('a');
+
+    a.href = URL.createObjectURL(blob);
+
+    const dt = new Date().toISOString().replace(/[:.]/g,'-');
+
+    a.download = `subtitle-inline-${dt}.txt`;
+
+    a.click();
+
+    URL.revokeObjectURL(a.href);
+
+  });
+
+
+
+  fsSel.addEventListener('change', () => { hist.style.fontSize = fsSel.value + 'px'; });
+
+  hist.style.fontSize = fsSel.value + 'px';
 
 })();
 
