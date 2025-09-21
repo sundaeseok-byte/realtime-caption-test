@@ -8,7 +8,7 @@
 
   <meta name="viewport" content="width=device-width,initial-scale=1" />
 
-  <title>실시간 한국어 자막 (타자기 스타일)</title>
+  <title>실시간 한국어 자막 (보정 필터)</title>
 
   <style>
 
@@ -94,7 +94,7 @@
 
 
 
-  // 화면에 append-only 텍스트 노드
+  // append-only 텍스트
 
   const tape = document.createTextNode("");
 
@@ -102,73 +102,123 @@
 
 
 
-  // ===== 타자기 버퍼 =====
+  let currentStream = "";
 
-  let buffer = "";            // 새로 들어온 글자들
-
-  let typingTimer = null;     // 타자기 출력 타이머
-
-  const BUFFER_DELAY_MS = 600; // 입력 받고 기다리는 시간
-
-  const TYPING_INTERVAL = 120; // 글자마다 출력 텀(ms)
+  let queuedDelta = "";
 
 
 
-  function startTyping(){
+  const THROTTLE_MS = 380;
 
-    if (typingTimer) return;
+  let lastFlushAt = 0, flushTimer = null;
 
-    typingTimer = setInterval(()=>{
+
 
-      if (buffer.length>0){
+  // ===== 보정 함수들 =====
 
-        tape.data += buffer[0];
+  // 반복 단어 제거: 같은 단어가 연속 두 번 나오면 하나만 남김
 
-        buffer = buffer.slice(1);
+  function dedupeWords(text) {
 
-        screen.scrollTop = screen.scrollHeight;
-
-      } else {
-
-        clearInterval(typingTimer);
-
-        typingTimer = null;
-
-      }
-
-    }, TYPING_INTERVAL);
+    return text.replace(/\b(\S+)\s+\1\b/g, "$1");
 
   }
 
 
 
-  let bufferDelayTimer = null;
+  // 간단 띄어쓰기 보정: 조사/어미에 붙은 불필요한 공백 정리
 
-  function addToBuffer(text){
+  function fixSpacing(text) {
 
-    if (!text) return;
+    return text
 
-    buffer += text;
+      .replace(/\s+([.,!?])/g, "$1")   // 문장부호 앞 공백 제거
 
-    if (bufferDelayTimer) clearTimeout(bufferDelayTimer);
-
-    bufferDelayTimer = setTimeout(()=>{
-
-      startTyping();
-
-    }, BUFFER_DELAY_MS);
+      .replace(/\s{2,}/g, " ");        // 연속 공백 → 하나로
 
   }
 
 
 
-  // ===== Speech Recognition 이벤트 =====
+  function normalize(text) {
+
+    return fixSpacing(dedupeWords(text));
+
+  }
+
+
+
+  function commonPrefixLen(a,b){
+
+    const n = Math.min(a.length, b.length);
+
+    let i=0;
+
+    while (i<n && a.charCodeAt(i)===b.charCodeAt(i)) i++;
+
+    return i;
+
+  }
+
+
+
+  function scheduleAppendFrom(newStream){
+
+    const cpl = commonPrefixLen(currentStream, newStream);
+
+    let delta = newStream.slice(cpl);
+
+    if (!delta) return;
+
+
+
+    // 보정 적용
+
+    delta = normalize(delta);
+
+
+
+    queuedDelta += delta;
+
+
+
+    const now = performance.now();
+
+    const due = Math.max(0, THROTTLE_MS - (now - lastFlushAt));
+
+    if (!flushTimer) flushTimer = setTimeout(flush, due);
+
+    currentStream = newStream;
+
+  }
+
+
+
+  function flush(){
+
+    if (queuedDelta) {
+
+      tape.data += queuedDelta;
+
+      screen.scrollTop = screen.scrollHeight;
+
+      queuedDelta = "";
+
+    }
+
+    lastFlushAt = performance.now();
+
+    flushTimer = null;
+
+  }
+
+
 
   r.onresult = (e) => {
 
-    let interim = "";
+    let latestInterim = null;
 
-    let finals  = [];
+    let gotFinal = false;
 
 
 
@@ -176,27 +226,27 @@
 
       const seg = e.results[i][0].transcript;
 
-      if (e.results[i].isFinal) finals.push(seg);
+      if (e.results[i].isFinal) {
 
-      else interim += seg;
+        gotFinal = true;
+
+      } else {
+
+        latestInterim = (latestInterim??"") + seg;
+
+      }
 
     }
 
 
 
-    if (interim) {
+    if (latestInterim !== null) {
 
-      addToBuffer(interim);
-
-    }
-
-    if (finals.length){
-
-      const raw = finals[finals.length-1];
-
-      addToBuffer(" " + raw + " ");
+      scheduleAppendFrom(latestInterim);
 
     }
+
+    if (gotFinal) currentStream = "";
 
   };
 
@@ -208,4 +258,42 @@
 
     if (recognizing) { try { r.start(); } catch {} }
 
-   
+    else { state.textContent="대기"; toggle.textContent="🎙️ 시작"; toggle.className="primary"; }
+
+  };
+
+
+
+  toggle.onclick = async () => {
+
+    if (!recognizing) {
+
+      try { const s = await navigator.mediaDevices.getUserMedia({audio:true}); s.getTracks().forEach(t=>t.stop()); }
+
+      catch { alert("마이크 권한 필요"); return; }
+
+      recognizing = true; r.start();
+
+    } else { recognizing = false; r.stop(); }
+
+  };
+
+
+
+  clearBtn.onclick = () => { tape.data=""; currentStream=""; queuedDelta=""; if (flushTimer){clearTimeout(flushTimer); flushTimer=null;} };
+
+  copyBtn.onclick  = async () => {
+
+    try { await navigator.clipboard.writeText(tape.data); state.textContent="복사됨"; setTimeout(()=>state.textContent=recognizing?"🎤 인식 중":"대기",900); }
+
+    catch { alert("복사 실패"); }
+
+  };
+
+})();
+
+</script>
+
+</body>
+
+</html>
