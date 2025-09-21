@@ -75,6 +75,7 @@
   let recognizing = false;
   let interimSpan = null;
   let rec = null;
+  let lastFinal = ""; // ⬅️ 마지막 확정 문장 저장(중복 방지)
 
   function nowTS() {
     const d = new Date();
@@ -83,8 +84,13 @@
 
   function appendText(text, isFinal=false) {
     if (isFinal) {
-      const line = (tsChk.checked ? nowTS() : '') + text.trim();
-      scr.append(document.createTextNode(line + '\n'));
+      const line = text.trim();
+      // 동일한 확정 문장이 반복되면 무시
+      if (line === lastFinal) return;
+      lastFinal = line;
+
+      const fullLine = (tsChk.checked ? nowTS() : '') + line;
+      scr.append(document.createTextNode(fullLine + '\n'));
       if (interimSpan) { interimSpan.remove(); interimSpan = null; }
     } else {
       if (!interimSpan) {
@@ -131,6 +137,7 @@
     };
     rec.onerror = (e) => appendText(`(오류: ${e.error})`, true);
     rec.onend = () => {
+      // 의도치 않게 종료되면 자동 재시작
       if (recognizing) {
         try { rec.start(); } catch(_) {}
       } else {
@@ -149,7 +156,7 @@
     setUI(false);
   }
 
-  // 🔑 마이크 권한 예열 추가
+  // 🔑 마이크 권한 예열: not-allowed 방지
   async function ensureMic() {
     if (!navigator.mediaDevices?.getUserMedia) return true;
     try {
@@ -177,6 +184,7 @@
   clearBtn.addEventListener('click', () => {
     scr.textContent = '';
     interimSpan = null;
+    lastFinal = ""; // 화면 지울 때 마지막 문장도 리셋
   });
 
   copyBtn.addEventListener('click', async () => {
