@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>실시간 자막 (한국어 · 무료 · 한 파일)</title>
+  <style>
+    :root { --bg:#0b0f14; --fg:#e9eef5; --muted:#8aa0b4; --accent:#4da3ff; }
+    * { box-sizing: border-box; }
+    body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.5 system-ui, -apple-system, Segoe UI, Roboto, Apple SD Gothic Neo, Noto Sans KR, Arial, sans-serif; }
+    header { padding:14px 16px; display:flex; gap:8px; align-items:center; flex-wrap:wrap; border-bottom:1px solid #1c2733; }
+    h1 { font-size:16px; margin:0 8px 0 0; color:var(--muted); font-weight:600; }
+    button, select { background:#111923; color:var(--fg); border:1px solid #1f2a36; padding:10px 14px; border-radius:12px; cursor:pointer; font-weight:600; }
+    button:hover { border-color:#2a3a4c; }
+    button.primary { background:var(--accent); color:#001733; border-color:transparent; }
+    button.danger { background:#ff4d6d; color:#250008; border-color:transparent; }
+    #status { margin-left:auto; font-size:13px; color:var(--muted); display:flex; align-items:center; gap:6px; }
+    #lamp { width:10px; height:10px; border-radius:50%; background:#485a6c; display:inline-block; }
+    #lamp.on { background:#27d07d; box-shadow:0 0 0 3px rgba(39,208,125,0.15); }
+    main { padding:12px; }
+    #screen { width:100%; height:65vh; padding:16px; border:1px solid #1f2a36; border-radius:16px; background:#0e141b; overflow:auto; white-space:pre-wrap; }
+    #caret { opacity:.6; }
+    footer { display:flex; gap:8px; flex-wrap:wrap; padding:12px; border-top:1px solid #1c2733; }
+    .pill { font-size:12px; color:var(--muted); }
+    .sr { position:absolute; left:-9999px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>실시간 자막</h1>
+    <button id="toggle" class="primary" aria-pressed="false">🎙️ 시작</button>
+    <button id="clear" title="화면 지우기">🧹 지우기</button>
+    <button id="copy" title="클립보드로 복사">📋 복사</button>
+    <button id="save" title="파일로 저장">💾 저장</button>
+    <select id="fontsize" title="글자 크기">
+      <option value="18">글자 18</option>
+      <option value="22" selected>글자 22</option>
+      <option value="28">글자 28</option>
+      <option value="36">글자 36</option>
+      <option value="48">글자 48</option>
+    </select>
+    <label class="pill"><input type="checkbox" id="timestamp" /> 타임스탬프</label>
+    <label class="pill"><input type="checkbox" id="autoscroll" checked /> 자동 스크롤</label>
+    <div id="status"><span id="lamp" aria-hidden="true"></span><span id="stateText">대기</span></div>
+  </header>
+
+  <main>
+    <div id="screen" aria-live="polite" aria-atomic="false"></div>
+  </main>
+
+  <footer>
+    <small class="pill">Tip: 시작 후 마이크 권한을 허용하세요. 인식이 멈추면 자동 재시작합니다.</small>
+  </footer>
+
+<script>
+(() => {
+  const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+  const scr = document.getElementById('screen');
+  const btn = document.getElementById('toggle');
+  const clearBtn = document.getElementById('clear');
+  const copyBtn = document.getElementById('copy');
+  const saveBtn = document.getElementById('save');
+  const fsSel = document.getElementById('fontsize');
+  const tsChk = document.getElementById('timestamp');
+  const autoChk = document.getElementById('autoscroll');
+  const lamp = document.getElementById('lamp');
+  const stateText = document.getElementById('stateText');
+
+  if (!SpeechRec) {
+    scr.textContent = '이 브라우저는 Web Speech API를 지원하지 않아요. 크롬/삼성 인터넷 최신 버전을 사용해 주세요.';
+    btn.disabled = true;
+    return;
+  }
+
+  let recognizing = false;
+  let interimSpan = null;
+  let rec = null;
+
+  function nowTS() {
+    const d = new Date();
+    return `[${d.getHours().toString().padStart(2,'0')}:${d.getMinutes().toString().padStart(2,'0')}:${d.getSeconds().toString().padStart(2,'0')}] `;
+  }
+
+  function appendText(text, isFinal=false) {
+    if (isFinal) {
+      const line = (tsChk.checked ? nowTS() : '') + text.trim();
+      scr.append(document.createTextNode(line + '\n'));
+      if (interimSpan) { interimSpan.remove(); interimSpan = null; }
+    } else {
+      if (!interimSpan) {
+        interimSpan = document.createElement('span');
+        interimSpan.id = 'caret';
+        interimSpan.style.opacity = '.7';
+        interimSpan.style.fontStyle = 'italic';
+        scr.append(interimSpan);
+      }
+      interimSpan.textContent = text;
+    }
+    if (autoChk.checked) scr.scrollTop = scr.scrollHeight;
+  }
+
+  function setUI(on) {
+    recognizing = on;
+    btn.textContent = on ? '⏸️ 일시정지' : '🎙️ 시작';
+    btn.classList.toggle('primary', !on);
+    btn.classList.toggle('danger', on);
+    btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    lamp.classList.toggle('on', on);
+    stateText.textContent = on ? '인식 중' : '대기';
+  }
+
+  function createRec() {
+    rec = new SpeechRec();
+    rec.lang = 'ko-KR';
+    rec.continuous = true;
+    rec.interimResults = true;
+    rec.maxAlternatives = 1;
+
+    rec.onstart = () => setUI(true);
+    rec.onresult = (e) => {
+      let interim = '';
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const t = e.results[i][0].transcript;
+        if (e.results[i].isFinal) {
+          appendText(t, true);
+        } else {
+          interim += t;
+        }
+      }
+      if (interim) appendText(interim, false);
+    };
+    rec.onerror = (e) => appendText(`(오류: ${e.error})`, true);
+    rec.onend = () => {
+      if (recognizing) {
+        try { rec.start(); } catch(_) {}
+      } else {
+        setUI(false);
+      }
+    };
+  }
+
+  function startRec() {
+    if (!rec) createRec();
+    try { rec.start(); } catch(_) {}
+  }
+
+  function stopRec() {
+    if (rec) rec.stop();
+    setUI(false);
+  }
+
+  // 🔑 마이크 권한 예열 추가
+  async function ensureMic() {
+    if (!navigator.mediaDevices?.getUserMedia) return true;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      stream.getTracks().forEach(t => t.stop());
+      return true;
+    } catch (e) {
+      appendText(`(마이크 권한 필요: ${e.name || e.message})`, true);
+      return false;
+    }
+  }
+
+  // 버튼 이벤트
+  btn.addEventListener('click', async () => {
+    if (!recognizing) {
+      const ok = await ensureMic();
+      if (!ok) return;
+      startRec();
+    } else {
+      recognizing = false;
+      stopRec();
+    }
+  });
+
+  clearBtn.addEventListener('click', () => {
+    scr.textContent = '';
+    interimSpan = null;
+  });
+
+  copyBtn.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(scr.textContent);
+      stateText.textContent = '복사됨';
+      setTimeout(()=> stateText.textContent = recognizing ? '인식 중' : '대기', 1000);
+    } catch { alert('복사 실패: 브라우저 권한 확인'); }
+  });
+
+  saveBtn.addEventListener('click', () => {
+    const blob = new Blob([scr.textContent], {type:'text/plain;charset=utf-8'});
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    const dt = new Date().toISOString().replace(/[:.]/g,'-');
+    a.download = `subtitle-${dt}.txt`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  });
+
+  fsSel.addEventListener('change', () => {
+    scr.style.fontSize = fsSel.value+'px';
+  });
+  scr.style.fontSize = fsSel.value+'px';
+})();
+</script>
+</body>
+</html>
