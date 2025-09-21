@@ -8,7 +8,7 @@
 
   <meta name="viewport" content="width=device-width,initial-scale=1" />
 
-  <title>실시간 한국어 자막 (append-only · anti-blink)</title>
+  <title>실시간 한국어 자막 (append-only + 맞춤법 보정 옵션)</title>
 
   <style>
 
@@ -24,13 +24,17 @@
 
     button.danger  { background:#ff4d6d; color:#000; }
 
-    #screen { padding:12px; height:80vh; overflow-y:auto; white-space:pre-wrap; }
+    #live { padding:8px 12px; color:#9aa3ad; font-style:italic; min-height:1.6em; }
+
+    #screen { padding:12px; height:70vh; overflow-y:auto; white-space:pre-wrap; }
 
     #state { margin-left:auto; color:#aaa; }
 
     .group { display:flex; gap:6px; align-items:center; }
 
     .pill  { font-size:12px; color:#9aa3ad; }
+
+    label.switch { display:flex; align-items:center; gap:6px; padding:6px 10px; border:1px solid #444; border-radius:8px; }
 
   </style>
 
@@ -60,11 +64,23 @@
 
 
 
+    <label class="switch" title="확정 시점에만 맞춤법 보정해서 추가 (과거 텍스트는 수정 안 함)">
+
+      <input type="checkbox" id="spellToggle" />
+
+      맞춤법 보정(최종만)
+
+    </label>
+
+
+
     <span id="state">대기</span>
 
   </header>
 
 
+
+  <div id="live" aria-live="polite"></div>
 
   <div id="screen"></div>
 
@@ -138,13 +154,17 @@
 
   const screen  = document.getElementById("screen");
 
+  const live    = document.getElementById("live");
+
+  const spellToggle = document.getElementById("spellToggle");
+
 
 
   let recognizing = false;
 
 
 
-  // 화면에 '교체 없이' 덧붙일 순수 텍스트 노드
+  // 본문은 append-only 텍스트 노드(깜빡임 방지)
 
   const tape = document.createTextNode("");
 
@@ -152,53 +172,33 @@
 
 
 
-  // append-only 상태
+  // 진행중 스트림(엔진의 최신 스냅샷)
 
-  let writtenLen = 0;            // 현재 화면에 써진 길이
+  let currentStream = "";
 
-  let currentStream = "";        // 엔진이 생각하는 진행중 스냅샷
-
-  let queuedDelta = "";          // 아직 화면에 안 붙인 델타
+  let queuedDelta = "";
 
 
 
-  // 표시 속도 (느리게)
+  // 표시 속도
 
-  const THROTTLE_MS = 280;
+  const THROTTLE_MS = 380;
 
   let lastFlushAt = 0, flushTimer = null;
 
 
 
-  // 워치독: onresult가 너무 오래 안 오면 재시작
+  // 중복 final 억제(같은 문장 연타 방지)
 
-  const WATCHDOG_MS = 8000;
+  let lastFinalNorm = "";
 
-  let lastResultAt = 0, watchdogTimer = null;
+  let lastFinalAt   = 0;
 
-  function kickWatchdog(){
+  const FINAL_DEDUP_MS = 1000;
 
-    lastResultAt = performance.now();
+
 
-    if (!watchdogTimer) {
-
-      watchdogTimer = setInterval(() => {
-
-        if (!recognizing) return;
-
-        if (performance.now() - lastResultAt > WATCHDOG_MS) {
-
-          try { r.stop(); r.start(); } catch {}
-
-          lastResultAt = performance.now();
-
-        }
-
-      }, 2000);
-
-    }
-
-  }
+  function norm(s){ return (s||"").replace(/\s+/g," ").trim().toLowerCase(); }
 
 
 
@@ -206,11 +206,7 @@
 
     const n = Math.min(a.length, b.length);
 
-    let i=0;
-
-    while (i<n && a.charCodeAt(i)===b.charCodeAt(i)) i++;
-
-    return i;
+    let i=0; while (i<n && a.charCodeAt(i)===b.charCodeAt(i)) i++; return i;
 
   }
 
@@ -220,7 +216,7 @@
 
     const cpl = commonPrefixLen(currentStream, newStream);
 
-    const delta = newStream.slice(cpl);          // 추가된 꼬리만
+    const delta = newStream.slice(cpl);
 
     if (!delta) return;
 
@@ -234,7 +230,7 @@
 
     if (!flushTimer) flushTimer = setTimeout(flush, due);
 
-    currentStream = newStream;                   // 내부 스냅샷만 갱신(화면은 append-only)
+    currentStream = newStream;
 
   }
 
@@ -244,9 +240,7 @@
 
     if (queuedDelta) {
 
-      tape.data += queuedDelta;                 // 교체 없이 '진짜' 덧붙임
-
-      writtenLen = tape.data.length;
+      tape.data += queuedDelta;
 
       screen.scrollTop = screen.scrollHeight;
 
@@ -262,13 +256,77 @@
 
 
 
-  r.onresult = (e) => {
+  /* ===== LanguageTool 맞춤법 검사 (최종만) =====
 
-    kickWatchdog();
+     공개 API: https://api.languagetool.org/v2/check (요청 제한/지연 가능)
 
-    let latestInterim = null;
+     실패 시 원문 그대로 쓴다(폴백). */
 
-    let gotFinal = false;
+  async function grammarCheckKo(text, timeoutMs = 1500){
+
+    const controller = new AbortController();
+
+    const to = setTimeout(()=>controller.abort(), timeoutMs);
+
+    try{
+
+      const res = await fetch("https://api.languagetool.org/v2/check", {
+
+        method: "POST",
+
+        headers: { "Content-Type":"application/x-www-form-urlencoded" },
+
+        body: new URLSearchParams({ language:"ko", text }),
+
+        signal: controller.signal
+
+      });
+
+      clearTimeout(to);
+
+      if (!res.ok) throw new Error("HTTP "+res.status);
+
+      const data = await res.json();
+
+      // 제안 적용
+
+      let out = text;
+
+      // matches는 뒤에서 앞으로 적용해야 인덱스 안 깨짐
+
+      const matches = (data.matches || []).sort((a,b)=> (b.offset - a.offset));
+
+      for (const m of matches){
+
+        const rep = (m.replacements && m.replacements[0]?.value) || null;
+
+        if (!rep) continue;
+
+        const start = m.offset, end = m.offset + m.length;
+
+        out = out.slice(0,start) + rep + out.slice(end);
+
+      }
+
+      return out;
+
+    }catch(_){
+
+      clearTimeout(to);
+
+      return text; // 실패하면 원문 유지
+
+    }
+
+  }
+
+
+
+  r.onresult = async (e) => {
+
+    let interim = "";
+
+    let finals  = [];
 
 
 
@@ -278,13 +336,19 @@
 
       if (e.results[i].isFinal) {
 
-        gotFinal = true;
+        const now = performance.now();
 
-        // append-only 정책: 이미 interim으로 붙여온 텍스트를 수정/교체하지 않음
+        const n = norm(seg);
+
+        if (n && n===lastFinalNorm && (now-lastFinalAt)<FINAL_DEDUP_MS) continue;
+
+        lastFinalNorm = n; lastFinalAt = now;
+
+        finals.push(seg);
 
       } else {
 
-        latestInterim = (latestInterim ?? "") + seg;
+        interim += seg;
 
       }
 
@@ -292,21 +356,57 @@
 
 
 
-    if (latestInterim !== null) {
+    // 모드: 보정 OFF → 인터림도 본문에 append-only
 
-      // 새 interim 스냅샷 기준으로 델타만 이어붙임
+    if (!spellToggle.checked) {
 
-      scheduleAppendFrom(latestInterim);
+      live.textContent = ""; // 라이브 영역 미사용
+
+      if (interim) scheduleAppendFrom(interim);
+
+      if (finals.length) currentStream = "";
+
+      return;
 
     }
 
 
 
-    if (gotFinal) {
+    // 모드: 보정 ON → 인터림은 라이브 영역에만, 본문은 final 확정 후 보정 적용해 append
 
-      // final 이후 다음 문장을 위해 내부 스냅샷 리셋
+    if (interim) {
+
+      live.textContent = interim;
+
+    } else {
+
+      live.textContent = "";
+
+    }
+
+
+
+    if (finals.length){
+
+      // 여러 final이 한꺼번에 오면 마지막 문장만 사용 (가장 최신)
+
+      const raw = finals[finals.length-1].trim();
+
+      if (raw) {
+
+        const fixed = await grammarCheckKo(raw);
+
+        // 본문에 새로 추가(append-only, 과거 텍스트는 건드리지 않음). 공백으로 구분
+
+        tape.data += (tape.data && !/\s$/.test(tape.data) ? " " : "") + fixed + " ";
+
+        screen.scrollTop = screen.scrollHeight;
+
+      }
 
       currentStream = "";
+
+      live.textContent = "";
 
     }
 
@@ -314,7 +414,7 @@
 
 
 
-  r.onstart = () => { state.textContent="🎤 인식 중"; toggle.textContent="⏸️ 중지"; toggle.className="danger"; kickWatchdog(); };
+  r.onstart = () => { state.textContent="🎤 인식 중"; toggle.textContent="⏸️ 중지"; toggle.className="danger"; };
 
   r.onend = () => {
 
@@ -336,27 +436,13 @@
 
     if (!recognizing) {
 
-      try {
+      try { const s = await navigator.mediaDevices.getUserMedia({audio:true}); s.getTracks().forEach(t=>t.stop()); }
 
-        const s = await navigator.mediaDevices.getUserMedia({audio:true});
-
-        s.getTracks().forEach(t=>t.stop());
-
-      } catch {
-
-        alert("마이크 권한이 필요합니다.");
-
-        return;
-
-      }
+      catch { alert("마이크 권한 필요"); return; }
 
       recognizing = true; r.start();
 
-    } else {
-
-      recognizing = false; r.stop();
-
-    }
+    } else { recognizing = false; r.stop(); }
 
   };
 
@@ -364,21 +450,19 @@
 
   clearBtn.onclick = () => {
 
-    tape.data = ""; writtenLen=0; currentStream=""; queuedDelta="";
+    tape.data=""; currentStream=""; queuedDelta="";
 
-    if (flushTimer) { clearTimeout(flushTimer); flushTimer=null; }
+    live.textContent="";
+
+    if (flushTimer){ clearTimeout(flushTimer); flushTimer=null; }
 
   };
 
-
+  copyBtn.onclick  = async () => {
 
-  copyBtn.onclick = async () => {
+    try { await navigator.clipboard.writeText(tape.data); state.textContent="복사됨"; setTimeout(()=>state.textContent=recognizing?"🎤 인식 중":"대기",900); }
 
-    try { await navigator.clipboard.writeText(tape.data); state.textContent="복사됨";
-
-      setTimeout(()=> state.textContent = recognizing ? "🎤 인식 중" : "대기", 900);
-
-    } catch { alert("복사 실패"); }
+    catch { alert("복사 실패"); }
 
   };
 
