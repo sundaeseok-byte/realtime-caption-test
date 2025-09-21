@@ -8,35 +8,23 @@
 
   <meta name="viewport" content="width=device-width,initial-scale=1" />
 
-  <title>실시간 한국어 자막 (줄바꿈 없이 이어쓰기)</title>
+  <title>실시간 한국어 자막 (글자 단위)</title>
 
   <style>
 
-    :root { --bg:#0b0f14; --fg:#e9eef5; --muted:#8aa0b4; --accent:#4da3ff; --border:#1f2a36; }
+    body { margin:0; background:#111; color:#eee; font:18px/1.6 "Noto Sans KR",sans-serif; }
 
-    * { box-sizing:border-box; }
+    header { padding:10px; border-bottom:1px solid #444; display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
 
-    body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.5 system-ui,-apple-system,Segoe UI,Roboto,"Noto Sans KR",Arial,sans-serif; }
+    button { padding:6px 12px; border-radius:6px; border:none; cursor:pointer; }
 
-    header { padding:12px; display:flex; gap:8px; align-items:center; flex-wrap:wrap; border-bottom:1px solid var(--border); }
+    button.primary { background:#4da3ff; color:#000; }
 
-    button { padding:8px 12px; border-radius:10px; border:1px solid var(--border); cursor:pointer; font-weight:600; }
+    button.danger { background:#ff4d6d; color:#000; }
 
-    button.primary { background:var(--accent); color:#001733; border-color:transparent; }
+    #screen { padding:12px; height:75vh; overflow-y:auto; white-space:pre-wrap; }
 
-    button.danger { background:#ff4d6d; color:#250008; border-color:transparent; }
-
-    label, select { border:1px solid var(--border); padding:8px 12px; border-radius:10px; background:#111923; color:var(--fg); font-weight:600; }
-
-    main { padding:12px; }
-
-    #hist { border:1px solid var(--border); border-radius:16px; background:#0e141b; padding:14px; height:68vh; overflow:auto; white-space:pre-wrap; }
-
-    .status { margin-left:auto; display:flex; align-items:center; gap:8px; color:var(--muted); }
-
-    #lamp { width:10px; height:10px; border-radius:50%; background:#485a6c; display:inline-block; }
-
-    #lamp.on { background:#27d07d; box-shadow:0 0 0 3px rgba(39,208,125,0.15); }
+    #state { margin-left:auto; color:#aaa; }
 
   </style>
 
@@ -52,37 +40,11 @@
 
     <button id="copy">📋 복사</button>
 
-    <button id="save">💾 저장</button>
-
-    <label title="문장 확정 없이 들리는 대로 즉시 누적"><input type="checkbox" id="rawMode" checked /> RAW(즉시 누적)</label>
-
-    <label title="타임스탬프"><input type="checkbox" id="timestamp" /> 타임스탬프</label>
-
-    <select id="fontsize" title="글자 크기">
-
-      <option value="18">글자 18</option>
-
-      <option value="22" selected>글자 22</option>
-
-      <option value="28">글자 28</option>
-
-      <option value="36">글자 36</option>
-
-      <option value="48">글자 48</option>
-
-    </select>
-
-    <div class="status"><span id="lamp"></span><span id="state">대기</span></div>
+    <span id="state">대기</span>
 
   </header>
 
-
-
-  <main>
-
-    <div id="hist" aria-live="polite" aria-atomic="false"></div>
-
-  </main>
+  <div id="screen"></div>
 
 
 
@@ -94,7 +56,7 @@
 
   if (!Rec) {
 
-    document.body.innerHTML = "<p style='padding:16px'>❌ 이 브라우저는 음성 인식을 지원하지 않습니다. 크롬/삼성 인터넷을 사용하세요.</p>";
+    document.body.innerHTML = "<p style='padding:16px'>❌ 크롬/삼성 인터넷 브라우저를 사용해주세요.</p>";
 
     return;
 
@@ -102,365 +64,101 @@
 
 
 
-  const hist = document.getElementById('hist');
+  const r = new Rec();
 
-  const toggle = document.getElementById('toggle');
+  r.lang = "ko-KR";
 
-  const clearBtn = document.getElementById('clear');
+  r.continuous = true;
 
-  const copyBtn = document.getElementById('copy');
-
-  const saveBtn = document.getElementById('save');
-
-  const rawModeChk = document.getElementById('rawMode');
-
-  const tsChk = document.getElementById('timestamp');
-
-  const fsSel = document.getElementById('fontsize');
-
-  const state = document.getElementById('state');
-
-  const lamp = document.getElementById('lamp');
+  r.interimResults = true;
 
 
 
   let recognizing = false;
 
-  let rec = null;
+  const toggle = document.getElementById("toggle");
+
+  const clearBtn = document.getElementById("clear");
+
+  const copyBtn = document.getElementById("copy");
+
+  const state = document.getElementById("state");
+
+  const screen = document.getElementById("screen");
 
 
 
-  // RAW 모드: 너무 잦은 덧붙임 제어
+  // 현재까지 누적된 텍스트
 
-  const RAW_APPEND_INTERVAL = 100; // ms
-
-  let lastAppendAt = 0;
+  let finalText = "";
 
 
 
-  // 스마트 모드: 침묵 확정 (줄바꿈 없이 이어쓰기)
+  r.onresult = (e) => {
 
-  const SILENCE_MS = 700;
+    let interim = "";
 
-  let sentenceBuf = "";
+    for (let i=e.resultIndex; i<e.results.length; i++) {
 
-  let silenceTimer = null;
+      const txt = e.results[i][0].transcript;
 
-
+      if (e.results[i].isFinal) {
 
-  // 화면 꺼짐 방지(지원 브라우저에서만)
+        finalText += txt; // 확정 → 누적
 
-  let wakeLock = null;
+      } else {
 
-  async function keepAwake(on){
-
-    try{
-
-      if (on && 'wakeLock' in navigator) {
-
-        wakeLock = await navigator.wakeLock.request('screen');
-
-      } else if (wakeLock) {
-
-        await wakeLock.release(); wakeLock = null;
+        interim += txt;   // 임시 → 즉시 표시
 
       }
-
-    }catch{}
-
-  }
-
-
-
-  function nowTS() {
-
-    const d = new Date();
-
-    const h = String(d.getHours()).padStart(2,'0');
-
-    const m = String(d.getMinutes()).padStart(2,'0');
-
-    const s = String(d.getSeconds()).padStart(2,'0');
-
-    return `[${h}:${m}:${s}] `;
-
-  }
-
-
-
-  // 🔸 줄바꿈 없이 이어쓰기: 항상 끝에 공백 하나만 추가
-
-  function appendChunk(text) {
-
-    if (!text) return;
-
-    const ts = tsChk.checked ? nowTS() : '';
-
-    // 마지막이 공백이 아니면 공백 추가
-
-    const needSpace = hist.textContent && !/\s$/.test(hist.textContent);
-
-    hist.append(document.createTextNode((ts ? ts : '') + (needSpace ? '' : '') + text + ' '));
-
-    hist.scrollTop = hist.scrollHeight;
-
-  }
-
-
-
-  function setUI(on) {
-
-    recognizing = on;
-
-    toggle.textContent = on ? '⏸️ 중지' : '🎙️ 시작';
-
-    toggle.className = on ? 'danger' : 'primary';
-
-    state.textContent = on ? '인식 중' : '대기';
-
-    lamp.classList.toggle('on', on);
-
-  }
-
-
-
-  function createRec() {
-
-    rec = new Rec();
-
-    rec.lang = 'ko-KR';
-
-    rec.continuous = true;
-
-    rec.interimResults = true;
-
-    rec.maxAlternatives = 1;
-
-
-
-    let restarting = false;
-
-
-
-    rec.onstart = () => setUI(true);
-
-
-
-    rec.onresult = (e) => {
-
-      let interimAccum = '';
-
-      for (let i = e.resultIndex; i < e.results.length; i++) {
-
-        const t = e.results[i][0].transcript;
-
-        if (e.results[i].isFinal) {
-
-          if (rawModeChk.checked) {
-
-            appendChunk(t.trim()); // 최종도 줄바꿈 없이
-
-          } else {
-
-            if (t.trim()) {
-
-              if (sentenceBuf && !/[ \u00A0]$/.test(sentenceBuf)) sentenceBuf += ' ';
-
-              sentenceBuf += t.trim();
-
-            }
-
-            finalizeIfSilent(); // 줄바꿈 없이 이어쓰기 확정
-
-          }
-
-        } else {
-
-          interimAccum += t;
-
-        }
-
-      }
-
-
-
-      if (interimAccum) {
-
-        if (rawModeChk.checked) {
-
-          const now = performance.now();
-
-          if (now - lastAppendAt >= RAW_APPEND_INTERVAL) {
-
-            appendChunk(interimAccum.trim());
-
-            lastAppendAt = now;
-
-          }
-
-        } else {
-
-          if (sentenceBuf && !/[ \u00A0]$/.test(sentenceBuf)) sentenceBuf += ' ';
-
-          sentenceBuf += interimAccum.trim();
-
-          finalizeIfSilent();
-
-        }
-
-      }
-
-    };
-
-
-
-    rec.onerror = (e) => {
-
-      appendChunk(`(오류: ${e.error})`);
-
-    };
-
-
-
-    rec.onend = () => {
-
-      if (!recognizing) return setUI(false);
-
-      if (restarting) return;
-
-      restarting = true;
-
-      setTimeout(() => {
-
-        try { rec.start(); } catch {}
-
-        restarting = false;
-
-      }, 250);
-
-    };
-
-  }
-
-
-
-  function finalizeIfSilent(){
-
-    if (silenceTimer) clearTimeout(silenceTimer);
-
-    silenceTimer = setTimeout(() => {
-
-      if (sentenceBuf.trim().length) {
-
-        appendChunk(sentenceBuf.trim()); // 🔸 줄바꿈 없이 이어쓰기
-
-        sentenceBuf = '';
-
-      }
-
-    }, SILENCE_MS);
-
-  }
-
-
-
-  async function ensureMic() {
-
-    if (!navigator.mediaDevices?.getUserMedia) return true;
-
-    try {
-
-      const s = await navigator.mediaDevices.getUserMedia({ audio:true });
-
-      s.getTracks().forEach(t=>t.stop());
-
-      return true;
-
-    } catch(e) {
-
-      appendChunk('(마이크 권한 필요)');
-
-      return false;
 
     }
 
-  }
+    // 확정 + 임시 결과를 합쳐서 표시
+
+    screen.textContent = finalText + interim;
+
+    screen.scrollTop = screen.scrollHeight;
+
+  };
 
 
 
-  function startRec() { if (!rec) createRec(); try { rec.start(); } catch {} }
+  r.onstart = () => { state.textContent="🎤 인식 중"; toggle.textContent="⏸️ 중지"; toggle.className="danger"; };
 
-  function stopRec() { if (rec) rec.stop(); setUI(false); }
+  r.onend = () => {
+
+    if (recognizing) { try{ r.start(); }catch{} }
+
+    else { state.textContent="대기"; toggle.textContent="🎙️ 시작"; toggle.className="primary"; }
+
+  };
 
 
 
-  // 이벤트
-
-  toggle.addEventListener('click', async () => {
+  toggle.onclick = async () => {
 
     if (!recognizing) {
 
-      const ok = await ensureMic();
+      try { const s = await navigator.mediaDevices.getUserMedia({audio:true}); s.getTracks().forEach(t=>t.stop()); } catch(e){ alert("마이크 권한 필요"); return; }
 
-      if (!ok) return;
+      recognizing = true; r.start();
 
-      await keepAwake(true);
+    } else { recognizing = false; r.stop(); }
 
-      startRec();
-
-    } else {
-
-      await keepAwake(false);
-
-      stopRec();
-
-    }
-
-  });
+  };
 
 
 
-  clearBtn.addEventListener('click', () => { hist.textContent = ''; sentenceBuf=''; });
+  clearBtn.onclick = () => { finalText=""; screen.textContent=""; };
 
-
+  copyBtn.onclick = async () => {
 
-  copyBtn.addEventListener('click', async () => {
+    try { await navigator.clipboard.writeText(screen.textContent); state.textContent="복사됨"; setTimeout(()=> state.textContent=recognizing?"🎤 인식 중":"대기",800); }
 
-    try {
+    catch { alert("복사 실패"); }
 
-      await navigator.clipboard.writeText(hist.textContent);
-
-      state.textContent = '복사됨'; setTimeout(()=> state.textContent = recognizing ? '인식 중' : '대기', 800);
-
-    } catch { alert('복사 실패: 권한 확인'); }
-
-  });
-
-
-
-  saveBtn.addEventListener('click', () => {
-
-    const blob = new Blob([hist.textContent], {type:'text/plain;charset=utf-8'});
-
-    const a = document.createElement('a');
-
-    a.href = URL.createObjectURL(blob);
-
-    const dt = new Date().toISOString().replace(/[:.]/g,'-');
-
-    a.download = `subtitle-inline-${dt}.txt`;
-
-    a.click();
-
-    URL.revokeObjectURL(a.href);
-
-  });
-
-
-
-  fsSel.addEventListener('change', () => { hist.style.fontSize = fsSel.value + 'px'; });
-
-  hist.style.fontSize = fsSel.value + 'px';
+  };
 
 })();
 
